@@ -1,0 +1,146 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-arm64-openssl-3.0.x"]
+}
+
+// Key-Value system configuration
+// e.g. "minutes_per_peso" = "10", "portal_title" = "OpenPisoWifi", "admin_pin" = "1234", "portal_domain" = "wifi.local", "router_ip" = "192.168.1.1", "portal_ip" = "192.168.1.240"
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Tracks active and historical Wi-Fi sessions
+model Session {
+  id                     String    @id @default(cuid())
+  sessionToken           String?   @unique
+  transferCode           String?   @unique
+  macAddress             String
+  ipAddress              String?
+  deviceName             String?
+  startTime              DateTime  @default(now())
+  endTime                DateTime
+  durationMinutes        Int
+  amountPaid             Float     @default(0)
+  isActive               Boolean   @default(true)
+  isPaused               Boolean   @default(false)
+  pausedRemainingSeconds Int       @default(0)
+  type                   String    @default("COIN") // "COIN" | "VOUCHER" | "FREE_TRIAL"
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([macAddress])
+  @@index([sessionToken])
+  @@index([transferCode])
+  @@index([isActive])
+  @@index([endTime])
+}
+
+// Tracks single-use prepaid voucher codes
+model Voucher {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  durationMinutes  Int
+  amountEquivalent Float     @default(0)
+  isUsed           Boolean   @default(false)
+  usedAt           DateTime?
+  usedByMac        String?
+  isRevoked        Boolean   @default(false)
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([code])
+  @@index([isUsed])
+  @@index([isRevoked])
+}
+
+// Daily revenue and financial records
+model Sale {
+  id          String   @id @default(cuid())
+  amount      Float
+  source      String   // "COIN" | "VOUCHER"
+  macAddress  String?
+  voucherCode String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Tracks physical cash collection audits from the coin box
+model CashCollection {
+  id          String   @id @default(cuid())
+  amount      Float
+  collectedBy String   @default("Admin")
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Tracks daily free trial claims per MAC address
+model FreeTrialClaim {
+  id         String   @id @default(cuid())
+  macAddress String
+  ipAddress  String?
+  claimedAt  DateTime @default(now())
+
+  @@index([macAddress])
+  @@index([claimedAt])
+}
+
+// VIP Whitelist & Banned Devices
+model DeviceRule {
+  id         String   @id @default(cuid())
+  macAddress String   @unique
+  name       String   // e.g. "Owner iPhone", "Neighbor Repeater"
+  type       String   // "WHITELIST" | "BLACKLIST"
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([macAddress])
+  @@index([type])
+}
+
+// Customer Loyalty Streaks (daily streak reward system keyed by Session Code)
+model LoyaltyStreak {
+  id                String    @id @default(cuid())
+  sessionCode       String    @unique // e.g. "PW-GDQLWK"
+  macAddress        String?
+  deviceName        String?
+  currentStreak     Int       @default(0)
+  highestStreak     Int       @default(0)
+  lastCreditDate    String?   // "YYYY-MM-DD" formatted in machine local timezone
+  lastCreditedAt    DateTime?
+  totalCredits      Int       @default(0)
+  totalAmountSpent  Float     @default(0)
+  totalBonusMinutes Int       @default(0)
+  lastBonusReward   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([sessionCode])
+  @@index([macAddress])
+  @@index([currentStreak])
+}
+
+// Historical log of bonus milestone claims
+model LoyaltyClaim {
+  id           String   @id @default(cuid())
+  sessionCode  String
+  streakDays   Int
+  bonusMinutes Int
+  rewardTitle  String
+  macAddress   String?
+  createdAt    DateTime @default(now())
+
+  @@index([sessionCode])
+  @@index([createdAt])
+}
+

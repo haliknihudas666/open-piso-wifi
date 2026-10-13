@@ -1,0 +1,87 @@
+name: Build and Publish Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Package Pre-Built Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Dependencies
+        run: |
+          if [ -d "portal" ]; then
+            cd portal && npm install
+            cd ../daemon && npm install --ignore-scripts
+          else
+            cd pisowifi-portal && npm install
+            cd ../pisowifi-daemon && npm install --ignore-scripts
+          fi
+
+      - name: Determine Release Tag
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            PKG_VER=$(node -p "require('./package.json').version")
+            TAG="v${PKG_VER#v}"
+          fi
+          echo "Release tag: $TAG"
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Git Tag Exists
+        run: |
+          TAG="${{ steps.vars.outputs.TAG }}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG" || true
+          fi
+
+      - name: Build Pre-Compiled Release Bundle
+        run: |
+          node scripts/build-release.mjs "${{ steps.vars.outputs.TAG }}"
+        env:
+          DATABASE_URL: "file:./prisma/dev.db"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.TAG }}
+          name: OpenPisoWiFi ${{ steps.vars.outputs.TAG }}
+          files: |
+            dist/piso-wifi-release.tar.gz
+            dist/version.json
+          generate_release_notes: true
+          make_latest: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

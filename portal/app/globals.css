@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --font-display: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --color-neo-yellow: #ffe17c;
+  --color-neo-charcoal: #121714;
+  --color-neo-sage: #b7c6c2;
+  --color-neo-dark: #121714;
+  --color-neo-surface-dark: #1b241e;
+  --color-neo-surface-light: #ffffff;
+}
+
+:root {
+  --bg-canvas: #f6f4ea;
+  --bg-surface: #ffffff;
+  --text-main: #000000;
+  --text-muted: #4b5563;
+  --border-color: #000000;
+}
+
+html.dark {
+  --bg-canvas: #111613;
+  --bg-surface: #1a231d;
+  --text-main: #ffffff;
+  --text-muted: #b7c6c2;
+  --border-color: #3b4d41;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-canvas);
+  color: var(--text-main);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Hard Shadows (0 Blur) */
+.shadow-neo-sm {
+  box-shadow: 2px 2px 0px 0px #000000;
+}
+
+.shadow-neo {
+  box-shadow: 4px 4px 0px 0px #000000;
+}
+
+.shadow-neo-lg {
+  box-shadow: 8px 8px 0px 0px #000000;
+}
+
+.shadow-neo-xl {
+  box-shadow: 12px 12px 0px 0px #000000;
+}
+
+/* Dark mode hard offset shadows */
+html.dark .shadow-neo-sm {
+  box-shadow: 2px 2px 0px 0px #000000;
+}
+
+html.dark .shadow-neo {
+  box-shadow: 4px 4px 0px 0px #000000;
+}
+
+html.dark .shadow-neo-lg {
+  box-shadow: 8px 8px 0px 0px #000000;
+}
+
+html.dark .shadow-neo-xl {
+  box-shadow: 12px 12px 0px 0px #000000;
+}
+
+/* Tactile Push Button Micro-interaction */
+.btn-neo {
+  transition: transform 0.12s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.12s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.btn-neo:hover:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px 0px #000000;
+}
+
+.btn-neo:active:not(:disabled) {
+  transform: translate(4px, 4px);
+  box-shadow: 0px 0px 0px 0px #000000;
+}
+
+/* Radial Dot Grid Patterns */
+.bg-dot-grid {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.13) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+html.dark .bg-dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+.bg-dot-grid-yellow {
+  background-color: #ffe17c;
+  background-image: radial-gradient(rgba(0, 0, 0, 0.12) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* Marquee Animation for Announcements */
+@keyframes marquee {
+  0% {
+    transform: translateX(100%);
+  }
+
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.animate-marquee {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee 18s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* Print optimization for Vouchers & Posters */
+@media print {
+  @page {
+    margin: 6mm;
+    size: auto;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  header,
+  aside,
+  nav,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  #piso-wifi-printable-sheet {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}

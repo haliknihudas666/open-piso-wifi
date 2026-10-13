@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-cream: #f6f4ea;
+    --brand-yellow: #ffe17c;
+    --brand-charcoal: #171e19;
+    --brand-sage: #b7c6c2;
+    --brand-coral: #ff6b6b;
+    --brand-mint: #4ade80;
+  }
+
+  body {
+    background-color: var(--bg-cream);
+    color: #000000;
+    overflow-x: hidden;
+  }
+}
+
+/* Utility Classes */
+.neo-border {
+  border: 2px solid #000000;
+}
+.neo-border-3 {
+  border: 3px solid #000000;
+}
+
+.neo-shadow-xs {
+  box-shadow: 2px 2px 0px 0px #000000;
+}
+.neo-shadow-sm {
+  box-shadow: 3px 3px 0px 0px #000000;
+}
+.neo-shadow {
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.neo-shadow-lg {
+  box-shadow: 8px 8px 0px 0px #000000;
+}
+.neo-shadow-xl {
+  box-shadow: 12px 12px 0px 0px #000000;
+}
+
+.btn-press {
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.btn-press:hover {
+  transform: translate(2px, 2px);
+  box-shadow: 3px 3px 0px 0px #000000;
+}
+.btn-press:active {
+  transform: translate(5px, 5px);
+  box-shadow: 0px 0px 0px 0px #000000;
+}
+
+.bg-dot-grid {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.16) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f6f4ea;
+  border-left: 2px solid #000;
+}
+::-webkit-scrollbar-thumb {
+  background: #ffe17c;
+  border: 2px solid #000;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #f59e0b;
+}

@@ -1,0 +1,26 @@
+{
+  "name": "open-piso-wifi-daemon",
+  "version": "1.0.0",
+  "module": "dist/index.js",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.17.0",
+    "@types/onoff": "^4.1.0",
+    "@types/ssh2": "^1.15.5",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "onoff": "^6.0.3",
+    "ssh2": "^1.17.0"
+  },
+  "scripts": {
+    "dev": "tsx watch index.ts",
+    "build": "esbuild index.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/index.js",
+    "start": "node dist/index.js"
+  }
+}

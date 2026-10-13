@@ -1,0 +1,22 @@
+{
+  "name": "open-piso-wifi",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:portal": "cd portal && npm run dev",
+    "dev:daemon": "cd daemon && npm run dev",
+    "dev:landing": "cd landing && npm run dev",
+    "build:landing": "cd landing && npm run build",
+    "build:portal": "cd portal && npm run build",
+    "seed:portal": "cd portal && npx tsx prisma/seed.ts",
+    "install:rpi": "bash scripts/install.sh",
+    "update:rpi": "bash scripts/update.sh",
+    "deploy:router": "bash scripts/deploy-router.sh",
+    "build:release": "node scripts/build-release.mjs",
+    "version:check": "node scripts/auto-version.mjs --dry-run",
+    "version:bump": "node scripts/auto-version.mjs",
+    "version:patch": "node scripts/auto-version.mjs --bump=patch",
+    "version:minor": "node scripts/auto-version.mjs --bump=minor",
+    "version:major": "node scripts/auto-version.mjs --bump=major"
+  }
+}

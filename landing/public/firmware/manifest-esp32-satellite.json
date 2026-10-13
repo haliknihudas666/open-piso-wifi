@@ -1,0 +1,17 @@
+{
+  "name": "OpenPisoWiFi ESP32 Satellite (Multi-Coinslot)",
+  "version": "1.0.0",
+  "home_assistant_domain": "openpisowifi",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "/firmware/esp32/bootloader.bin", "offset": 4096 },
+        { "path": "/firmware/esp32/partitions.bin", "offset": 32768 },
+        { "path": "/firmware/esp32/boot_app0.bin", "offset": 57344 },
+        { "path": "/firmware/esp32/esp32-satellite.bin", "offset": 65536 }
+      ]
+    }
+  ]
+}
