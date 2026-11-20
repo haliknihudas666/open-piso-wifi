@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'node:child_process';
 import { rebootOpenWrtRouter, flushRouterSessions } from '@/lib/daemon';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -29,7 +33,7 @@ export async function POST(request: NextRequest) {
 
       case 'restart_services': {
         if (process.platform === 'linux') {
-          exec('sleep 1 && sudo systemctl restart pisowifi-daemon.service pisowifi-portal.service');
+          exec('sleep 1 && sudo systemctl restart pisowifi-daemon.service && sudo systemctl restart pisowifi-portal.service');
           return NextResponse.json({ success: true, message: 'Restarting daemon and portal services...' });
         }
         return NextResponse.json({ success: true, message: 'Service restart simulated in development mode' });

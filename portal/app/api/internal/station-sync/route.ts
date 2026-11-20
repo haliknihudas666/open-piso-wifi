@@ -1,33 +1,75 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
 import { normalizeMac } from '@/lib/arp';
-import { authorizeClientMac, deauthorizeClientMac } from '@/lib/daemon';
+import { isInternalDaemonRequest } from '@/lib/admin-auth';
+import {
+  authorizeClientMac,
+  deauthorizeClientMac,
+  triggerDaemonStormShield,
+} from '@/lib/daemon';
 
 export const dynamic = 'force-dynamic';
 
-// Map of normalized MAC -> timestamp (ms) when device was first noticed absent from Wi-Fi stations
-const disconnectedTimers = new Map<string, number>();
+const STORM_SHIELD_DURATION_MS = 90 * 1000;
+const TICK_COMPENSATION_MS = 15 * 1000;
 
-export async function GET() {
+declare global {
+  var globalStationDisconnectTimers: Map<string, number> | undefined;
+  var globalStormShieldUntil: number | undefined;
+  var globalPrevOnlineActiveMacs: Set<string> | undefined;
+}
+
+// Map of normalized MAC -> timestamp (ms) when device was first noticed absent from Wi-Fi stations
+const disconnectedTimers: Map<string, number> =
+  global.globalStationDisconnectTimers ?? new Map<string, number>();
+global.globalStationDisconnectTimers = disconnectedTimers;
+
+const prevOnlineActiveMacs: Set<string> =
+  global.globalPrevOnlineActiveMacs ?? new Set<string>();
+global.globalPrevOnlineActiveMacs = prevOnlineActiveMacs;
+
+export async function GET(request: NextRequest) {
+  if (!isInternalDaemonRequest(request)) {
+    return NextResponse.json({ error: 'Unauthorized internal request' }, { status: 401 });
+  }
+
+  const nowMs = Date.now();
+  const stormShieldUntil = global.globalStormShieldUntil ?? 0;
+  const stormShieldActive = nowMs < stormShieldUntil;
+
   return NextResponse.json({
     status: 'online',
     trackedDisconnectedStations: disconnectedTimers.size,
+    stormShieldActive,
+    stormShieldRemainingSec: stormShieldActive
+      ? Math.max(0, Math.ceil((stormShieldUntil - nowMs) / 1000))
+      : 0,
   });
 }
 
 export async function POST(request: NextRequest) {
+  if (!isInternalDaemonRequest(request)) {
+    return NextResponse.json({ error: 'Unauthorized internal request' }, { status: 401 });
+  }
+
   await ensureSqlitePragmas();
 
   try {
     const body = await request.json().catch(() => ({}));
     const rawActiveMacs: string[] = Array.isArray(body.activeMacs) ? body.activeMacs : [];
     const scanOk = body.scanOk === true;
+    const daemonReportedStorm = body.stormShieldActive === true;
 
-    // Load auto-pause and auto-resume settings
+    // Load auto-pause, auto-resume, and Storm Shield settings
     const settings = await prisma.setting.findMany({
       where: {
         key: {
-          in: ['auto_pause_on_disconnect', 'auto_pause_grace_seconds', 'auto_resume_on_reconnect'],
+          in: [
+            'auto_pause_on_disconnect',
+            'auto_pause_grace_seconds',
+            'auto_resume_on_reconnect',
+            'shield_storm_shield_enabled',
+          ],
         },
       },
     });
@@ -36,6 +78,7 @@ export async function POST(request: NextRequest) {
     const autoPauseEnabled = settingsMap.get('auto_pause_on_disconnect') !== 'false';
     const graceSeconds = Math.max(15, parseInt(settingsMap.get('auto_pause_grace_seconds') || '60', 10));
     const autoResumeEnabled = settingsMap.get('auto_resume_on_reconnect') !== 'false';
+    const stormShieldEnabled = settingsMap.get('shield_storm_shield_enabled') !== 'false';
 
     const currentAssociatedMacs = new Set<string>(
       rawActiveMacs.map((m) => normalizeMac(m).toLowerCase())
@@ -44,9 +87,101 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const nowMs = now.getTime();
 
+    // Load active unexpired unpaused sessions to evaluate Storm Shield mass disconnect
+    const preSyncValidSessions = await prisma.session.findMany({
+      where: {
+        isActive: true,
+        isPaused: false,
+        endTime: { gt: now },
+      },
+    });
+
+    // Determine currently associated active session MACs
+    const currentOnlineActiveMacs = new Set<string>();
+    for (const s of preSyncValidSessions) {
+      const norm = normalizeMac(s.macAddress).toLowerCase();
+      if (currentAssociatedMacs.has(norm)) {
+        currentOnlineActiveMacs.add(norm);
+      }
+    }
+
+    // Detect mass disconnect: if >=3 active sessions previously existed (associated) and >=50% drop together
+    let stormShieldUntil = global.globalStormShieldUntil ?? 0;
+    if (stormShieldEnabled && scanOk && prevOnlineActiveMacs.size >= 3) {
+      let droppedCount = 0;
+      for (const prevMac of prevOnlineActiveMacs) {
+        if (!currentAssociatedMacs.has(prevMac)) {
+          droppedCount++;
+        }
+      }
+
+      if (droppedCount / prevOnlineActiveMacs.size >= 0.5) {
+        const wasAlreadyActive = nowMs < stormShieldUntil;
+        stormShieldUntil = nowMs + STORM_SHIELD_DURATION_MS;
+        global.globalStormShieldUntil = stormShieldUntil;
+
+        if (!wasAlreadyActive) {
+          const reason = `Mass disconnect detected: ${droppedCount}/${prevOnlineActiveMacs.size} active sessions dropped simultaneously`;
+          console.warn(`[STORM SHIELD] 🛡️ Engaged 90s protection freeze! ${reason}`);
+          triggerDaemonStormShield({
+            durationSeconds: 90,
+            reason,
+            active: true,
+          }).catch(() => {});
+        }
+      }
+    }
+
+    if (stormShieldEnabled && daemonReportedStorm && nowMs >= stormShieldUntil) {
+      stormShieldUntil = nowMs + STORM_SHIELD_DURATION_MS;
+      global.globalStormShieldUntil = stormShieldUntil;
+    }
+
+    // Update baseline of associated active sessions for next tick
+    if (scanOk) {
+      prevOnlineActiveMacs.clear();
+      for (const mac of currentOnlineActiveMacs) {
+        prevOnlineActiveMacs.add(mac);
+      }
+    }
+
+    const stormShieldActive = stormShieldEnabled && (daemonReportedStorm || nowMs < stormShieldUntil);
+
+    // If Storm Shield is active:
+    // - Do NOT auto-pause/deauthorize disconnected sessions
+    // - Shift active unexpired sessions' endTime forward by 15s so paying users don't lose time during a deauth storm
+    if (stormShieldActive) {
+      disconnectedTimers.clear();
+      let compensatedSessionsCount = 0;
+
+      for (const session of preSyncValidSessions) {
+        await prisma.session.update({
+          where: { id: session.id },
+          data: {
+            endTime: new Date(session.endTime.getTime() + TICK_COMPENSATION_MS),
+          },
+        });
+        compensatedSessionsCount++;
+      }
+
+      return NextResponse.json({
+        success: true,
+        stormShieldActive: true,
+        stormShieldRemainingSec: Math.max(0, Math.ceil((stormShieldUntil - nowMs) / 1000)),
+        compensatedSessionsCount,
+        autoPauseEnabled,
+        graceSeconds,
+        autoResumeEnabled,
+        associatedStationsCount: currentAssociatedMacs.size,
+        activeSessionsCount: preSyncValidSessions.length,
+        expiredCleanedCount: 0,
+        pausedCount: 0,
+        resumedCount: 0,
+        pendingDisconnectTimers: 0,
+      });
+    }
+
     // 1. CLEANUP EXPIRED ACTIVE SESSIONS (endTime <= now)
-    // When time runs out, immediately mark session inactive, revoke OpenWrt firewall access,
-    // flush conntrack connections, and kick the station from the Wi-Fi AP.
     const expiredSessions = await prisma.session.findMany({
       where: {
         isActive: true,
@@ -68,28 +203,13 @@ export async function POST(request: NextRequest) {
       console.log(`[SESSION EXPIRED] Device ${exp.macAddress} time ran out. Revoked from OpenWrt and Wi-Fi station kicked.`);
     }
 
-    // Load VIP whitelist to prevent disconnecting whitelisted devices
-    const whitelistedDevices = await prisma.deviceRule.findMany({
-      where: { type: 'WHITELIST' },
-    });
-    const whitelistSet = new Set(whitelistedDevices.map((w) => normalizeMac(w.macAddress).toLowerCase()));
-
-    // Query active unexpired unpaused sessions
-    const validActiveSessions = await prisma.session.findMany({
-      where: {
-        isActive: true,
-        isPaused: false,
-        endTime: { gt: now },
-      },
-    });
+    const validActiveSessions = preSyncValidSessions;
     const validMacSet = new Set(validActiveSessions.map((s) => normalizeMac(s.macAddress).toLowerCase()));
 
     let pausedCount = 0;
     let resumedCount = 0;
 
     // 2. AUTO-PAUSE & AUTO-RESUME (When enabled)
-    // Safeguard: Only skip auto-pause on an empty scan if the caller did NOT confirm scanOk: true
-    // (when scanOk is true, 0 associated stations means all Wi-Fi clients genuinely disconnected!).
     const skipAutoPauseEvaluation = !scanOk && currentAssociatedMacs.size === 0 && validActiveSessions.length > 0;
     if (skipAutoPauseEvaluation) {
       console.warn(
@@ -103,7 +223,6 @@ export async function POST(request: NextRequest) {
         const normMac = normalizeMac(session.macAddress).toLowerCase();
 
         if (!currentAssociatedMacs.has(normMac)) {
-          // Device is not currently associated with any Wi-Fi AP radio
           if (!disconnectedTimers.has(normMac)) {
             disconnectedTimers.set(normMac, nowMs);
           } else {
@@ -117,7 +236,6 @@ export async function POST(request: NextRequest) {
               );
 
               if (remainingSeconds > 5) {
-                // Freeze the remaining time in database
                 await prisma.session.update({
                   where: { id: session.id },
                   data: {
@@ -126,7 +244,6 @@ export async function POST(request: NextRequest) {
                   },
                 });
 
-                // Cut off OpenWrt firewall forwarding immediately
                 await deauthorizeClientMac(session.macAddress);
 
                 pausedCount++;
@@ -141,7 +258,6 @@ export async function POST(request: NextRequest) {
             }
           }
         } else {
-          // Device IS associated with Wi-Fi: clear any pending disconnect timer
           disconnectedTimers.delete(normMac);
         }
       }
@@ -159,7 +275,6 @@ export async function POST(request: NextRequest) {
         for (const session of pausedSessions) {
           const normMac = normalizeMac(session.macAddress).toLowerCase();
           if (currentAssociatedMacs.has(normMac)) {
-            // Device returned and re-associated to the AP!
             const newEndTime = new Date(nowMs + session.pausedRemainingSeconds * 1000);
             const remainingMinutes = Math.max(1, Math.ceil(session.pausedRemainingSeconds / 60));
 
@@ -173,7 +288,6 @@ export async function POST(request: NextRequest) {
               },
             });
 
-            // Re-authorize client on OpenWrt firewall (resuming existing session, not new payment)
             await authorizeClientMac(session.macAddress, remainingMinutes, session.ipAddress || undefined, {
               amount: 0,
               isNewSession: false,
@@ -201,6 +315,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      stormShieldActive: false,
+      stormShieldRemainingSec: 0,
       autoPauseEnabled,
       graceSeconds,
       autoResumeEnabled,

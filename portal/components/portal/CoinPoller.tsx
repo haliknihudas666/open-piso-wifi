@@ -27,6 +27,7 @@ interface CoinPollerProps {
   onConnectSuccess: (data: any) => void;
   isConnected?: boolean;
   macHint?: string;
+  slotId?: string;
   showSimulator?: boolean;
   simulatedState?: 'standby' | 'active' | 'credited';
   simulatedPulses?: number;
@@ -36,6 +37,7 @@ export function CoinPoller({
   onConnectSuccess,
   isConnected = false,
   macHint,
+  slotId,
   showSimulator: propShowSimulator,
   simulatedState,
   simulatedPulses,
@@ -54,10 +56,13 @@ export function CoinPoller({
   const prevPulsesRef = useRef<number>(0);
   const pulseBumpTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const coinsEndpoint = slotId ? `/api/coins?slotId=${encodeURIComponent(slotId)}` : '/api/coins';
+  const insertActiveKey = slotId ? `piso_insert_active:${slotId}` : 'piso_insert_active';
+
   // Dynamic high-frequency polling:
   // When inserting coins or slot is active, poll every 200ms for instantaneous pulse counting!
   // When idle, poll every 2500ms to save CPU and bandwidth.
-  const { data, mutate } = useSWR('/api/coins', fetcher, {
+  const { data, mutate } = useSWR(coinsEndpoint, fetcher, {
     refreshInterval: (isLocallyActive || countdown !== null) ? 200 : 2500,
     revalidateOnFocus: true,
   });
@@ -135,14 +140,14 @@ export function CoinPoller({
 
   // Restore locally active state across page reloads if this client holds the active session lock
   useEffect(() => {
-    if (typeof window !== 'undefined' && sessionStorage.getItem('piso_insert_active') === 'true') {
+    if (typeof window !== 'undefined' && sessionStorage.getItem(insertActiveKey) === 'true') {
       if (isHolder && coinSlotEnabled && (data?.lockRemainingSeconds ?? 0) > 0) {
         setIsLocallyActive(true);
       } else {
-        sessionStorage.removeItem('piso_insert_active');
+        sessionStorage.removeItem(insertActiveKey);
       }
     }
-  }, [isHolder, coinSlotEnabled, data?.lockRemainingSeconds]);
+  }, [isHolder, coinSlotEnabled, data?.lockRemainingSeconds, insertActiveKey]);
 
   // Start countdown & track real-time pulses whenever slot becomes active or new coins drop
   useEffect(() => {
@@ -180,12 +185,12 @@ export function CoinPoller({
         // Timed out with 0 coins: revert to idle standby state
         setIsLocallyActive(false);
         if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('piso_insert_active');
+          sessionStorage.removeItem(insertActiveKey);
         }
         fetch('/api/coins', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'disable' }),
+          body: JSON.stringify({ action: 'disable', ...(slotId ? { slotId } : {}) }),
         }).catch(() => { });
         mutate();
       }
@@ -203,7 +208,7 @@ export function CoinPoller({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isSlotActive, countdown, pulses, mutate]);
+  }, [isSlotActive, countdown, pulses, mutate, slotId, insertActiveKey]);
 
   const handleStartInsertCoin = async () => {
     if (!isWanOnline) {
@@ -226,7 +231,7 @@ export function CoinPoller({
       const res = await fetch('/api/coins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'enable' }),
+        body: JSON.stringify({ action: 'enable', ...(slotId ? { slotId } : {}) }),
       });
       const resData = await res.json().catch(() => ({}));
 
@@ -245,7 +250,7 @@ export function CoinPoller({
         setIsLocallyActive(false);
         setCountdown(null);
         if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('piso_insert_active');
+          sessionStorage.removeItem(insertActiveKey);
         }
         await mutate();
         return;
@@ -254,7 +259,7 @@ export function CoinPoller({
       setIsLocallyActive(true);
       setCountdown(timeoutSeconds);
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('piso_insert_active', 'true');
+        sessionStorage.setItem(insertActiveKey, 'true');
       }
       await mutate();
     } catch (err) {
@@ -263,7 +268,7 @@ export function CoinPoller({
       setIsLocallyActive(false);
       setCountdown(null);
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('piso_insert_active');
+        sessionStorage.removeItem(insertActiveKey);
       }
     } finally {
       setIsActivating(false);
@@ -276,7 +281,7 @@ export function CoinPoller({
     setIsLocallyActive(true);
     setCountdown(timeoutSeconds);
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem('piso_insert_active', 'true');
+      sessionStorage.setItem(insertActiveKey, 'true');
     }
 
     try {
@@ -284,13 +289,13 @@ export function CoinPoller({
       await fetch('/api/coins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'enable' }),
+        body: JSON.stringify({ action: 'enable', ...(slotId ? { slotId } : {}) }),
       });
       // Simulate coin drop
       await fetch('/api/coins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'simulate', amount }),
+        body: JSON.stringify({ action: 'simulate', amount, ...(slotId ? { slotId } : {}) }),
       });
       await mutate();
     } catch (err) {
@@ -305,12 +310,12 @@ export function CoinPoller({
       await fetch('/api/coins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'clear' }),
+        body: JSON.stringify({ action: 'clear', ...(slotId ? { slotId } : {}) }),
       });
       setIsLocallyActive(false);
       setCountdown(null);
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('piso_insert_active');
+        sessionStorage.removeItem(insertActiveKey);
       }
       await mutate();
     } catch (err) {
@@ -331,7 +336,7 @@ export function CoinPoller({
       const res = await fetch('/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ macHint }),
+        body: JSON.stringify({ macHint, ...(slotId ? { slotId } : {}) }),
       });
 
       const result = await res.json();
@@ -345,7 +350,7 @@ export function CoinPoller({
 
       setIsLocallyActive(false);
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('piso_insert_active');
+        sessionStorage.removeItem(insertActiveKey);
       }
       mutate();
       onConnectSuccess(result);
@@ -369,8 +374,13 @@ export function CoinPoller({
               <Coins className={`w-5 h-5 ${isSlotActive ? 'animate-bounce' : ''}`} />
             </div>
             <div>
-              <h2 className="text-base font-extrabold font-display leading-tight text-black dark:text-white">
-                Coin Slot Acceptor
+              <h2 className="text-base font-extrabold font-display leading-tight text-black dark:text-white flex items-center gap-1.5 flex-wrap">
+                <span>Coin Slot Acceptor</span>
+                {slotId && (
+                  <Badge variant="info" className="text-[10px] py-0 font-mono">
+                    Slot: {slotId}
+                  </Badge>
+                )}
               </h2>
               <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold">
                 Accepts ₱1, ₱5, ₱10, ₱20 coins
@@ -604,12 +614,12 @@ export function CoinPoller({
                     setIsLocallyActive(false);
                     setCountdown(null);
                     if (typeof window !== 'undefined') {
-                      sessionStorage.removeItem('piso_insert_active');
+                      sessionStorage.removeItem(insertActiveKey);
                     }
                     await fetch('/api/coins', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ action: 'disable' }),
+                      body: JSON.stringify({ action: 'disable', ...(slotId ? { slotId } : {}) }),
                     }).catch(() => { });
                     mutate();
                   }}

@@ -1,35 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getMacFromIp, cleanIpv4 } from '@/lib/arp';
-import { getDaemonCoins, clearDaemonCoins, authorizeClientMac, deauthorizeClientMac, getRouterDhcpLeases } from '@/lib/daemon';
+import { getMacFromIp } from '@/lib/arp';
+import { getTrustedClientIp } from '@/lib/client-ip';
+import {
+  claimDaemonCoins,
+  authorizeClientMac,
+  deauthorizeClientMac,
+  getRouterDhcpLeases,
+} from '@/lib/daemon';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
-import { calculateDurationFromAmount } from '@/lib/rates';
+import {
+  calculateDurationFromAmount,
+  DEFAULT_RATE_TIERS,
+  DEFAULT_PROMO_TIERS,
+  isPromoActive,
+  RateTier,
+} from '@/lib/rates';
 import { getFriendlyDeviceName } from '@/lib/device-helper';
 import { getActiveLock, isClientLockHolder, releaseCoinLock } from '@/lib/coin-lock';
 import { processLoyaltyCredit, normalizeSessionCode } from '@/lib/loyalty';
+import { generateSecureTransferCode } from '@/lib/secure-codes';
+import {
+  VOUCHER_ATTEMPT_POLICY,
+  checkRateLimit,
+  clearRateLimit,
+  recordRateLimitFailure,
+} from '@/lib/rate-limit';
 import crypto from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
 
-function generateTransferCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = 'PW-';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
 async function generateUniqueTransferCode(): Promise<string> {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 5; attempt++) {
-    let code = 'PW-';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
+    const code = generateSecureTransferCode();
     const existing = await prisma.session.findUnique({ where: { transferCode: code } }).catch(() => null);
     if (!existing) return code;
   }
-  return `PW-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  return `PW-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
 }
 
 async function generateUniqueSessionToken(): Promise<string> {
@@ -43,8 +49,9 @@ async function generateUniqueSessionToken(): Promise<string> {
 
 interface ConnectRequestBody {
   voucherCode?: string;
-  mockMac?: string; // For testing in local dev environment
-  macHint?: string; // Passed from OpenWrt redirect query parameter
+  slotId?: string;
+  mockMac?: string; // For testing in local dev environment only
+  macHint?: string; // Passed in dev only
 }
 
 export async function POST(request: NextRequest) {
@@ -52,15 +59,24 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = (await request.json().catch(() => ({}))) as ConnectRequestBody;
-    const rawIp =
-      request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-      request.headers.get('x-real-ip') ||
-      '127.0.0.1';
+    const isProd = process.env.NODE_ENV === 'production';
 
-    const clientIp = cleanIpv4(rawIp);
+    const hasMockMac = typeof body.mockMac === 'string' && body.mockMac.trim().length > 0;
+    const hasMacHint = typeof body.macHint === 'string' && body.macHint.trim().length > 0;
+    if (isProd && (hasMockMac || hasMacHint)) {
+      return NextResponse.json(
+        { error: 'Client-supplied MAC hints are blocked in production.' },
+        { status: 403 }
+      );
+    }
 
-    // Step 1: Extract MAC address using kernel ARP table / proc / arp CLI / OpenWrt
-    let macAddress = body.mockMac || (await getMacFromIp(clientIp, body.macHint));
+    const clientIp = getTrustedClientIp(request);
+    const slotId = typeof body.slotId === 'string' && body.slotId.trim() ? body.slotId.trim() : undefined;
+
+    // Step 1: Extract MAC address using trusted IP & ARP table
+    const macAddress =
+      (!isProd && hasMockMac ? body.mockMac!.trim() : null) ||
+      (await getMacFromIp(clientIp, !isProd && hasMacHint ? body.macHint!.trim() : null));
 
     if (!macAddress) {
       return NextResponse.json(
@@ -79,6 +95,22 @@ export async function POST(request: NextRequest) {
 
     // Step 2: Determine if connecting via Voucher, Session Transfer Code, or Inserted Coins
     if (body.voucherCode && body.voucherCode.trim().length > 0) {
+      const ipRate = checkRateLimit('voucher_ip', clientIp, VOUCHER_ATTEMPT_POLICY);
+      const macRate = checkRateLimit('voucher_mac', macAddress.toLowerCase(), VOUCHER_ATTEMPT_POLICY);
+      if (!ipRate.allowed || !macRate.allowed) {
+        const retryAfter = Math.max(ipRate.retryAfterSeconds, macRate.retryAfterSeconds);
+        return NextResponse.json(
+          {
+            error: `Too many failed voucher or transfer attempts. Please wait ${retryAfter}s before trying again.`,
+            retryAfterSeconds: retryAfter,
+          },
+          {
+            status: 429,
+            headers: { 'Retry-After': String(retryAfter) },
+          }
+        );
+      }
+
       const cleanCode = body.voucherCode.trim().toUpperCase();
 
       const voucher = await prisma.voucher.findUnique({
@@ -87,6 +119,8 @@ export async function POST(request: NextRequest) {
 
       if (voucher) {
         if (voucher.isRevoked) {
+          recordRateLimitFailure('voucher_ip', clientIp, VOUCHER_ATTEMPT_POLICY);
+          recordRateLimitFailure('voucher_mac', macAddress.toLowerCase(), VOUCHER_ATTEMPT_POLICY);
           return NextResponse.json(
             { error: 'This voucher code has been revoked and cannot be used.' },
             { status: 400 }
@@ -94,26 +128,38 @@ export async function POST(request: NextRequest) {
         }
 
         if (voucher.isUsed) {
+          recordRateLimitFailure('voucher_ip', clientIp, VOUCHER_ATTEMPT_POLICY);
+          recordRateLimitFailure('voucher_mac', macAddress.toLowerCase(), VOUCHER_ATTEMPT_POLICY);
           return NextResponse.json(
             { error: 'This voucher code has already been redeemed.' },
-            { status: 400 }
+            { status: 409 }
           );
         }
 
-        durationMinutes = voucher.durationMinutes;
-        amountPaid = voucher.amountEquivalent;
-        paymentType = 'VOUCHER';
-        voucherCode = voucher.code;
-
-        // Mark voucher as used
-        await prisma.voucher.update({
-          where: { id: voucher.id },
+        // Atomic redemption: prevents race condition double-redemption
+        const redeemResult = await prisma.voucher.updateMany({
+          where: { id: voucher.id, isUsed: false, isRevoked: false },
           data: {
             isUsed: true,
             usedAt: now,
             usedByMac: macAddress,
           },
         });
+
+        if (redeemResult.count === 0) {
+          return NextResponse.json(
+            { error: 'This voucher code has already been redeemed or revoked.' },
+            { status: 409 }
+          );
+        }
+
+        clearRateLimit('voucher_ip', clientIp);
+        clearRateLimit('voucher_mac', macAddress.toLowerCase());
+
+        durationMinutes = voucher.durationMinutes;
+        amountPaid = voucher.amountEquivalent;
+        paymentType = 'VOUCHER';
+        voucherCode = voucher.code;
       } else {
         // Check if code matches an active session transfer code or session token
         const cleanTransferCode = cleanCode.startsWith('PW-') ? cleanCode : `PW-${cleanCode}`;
@@ -146,11 +192,16 @@ export async function POST(request: NextRequest) {
             : Math.max(0, Math.floor((activeTransferSession.endTime.getTime() - now.getTime()) / 1000));
 
           if (remainingSecs <= 0) {
+            recordRateLimitFailure('voucher_ip', clientIp, VOUCHER_ATTEMPT_POLICY);
+            recordRateLimitFailure('voucher_mac', macAddress.toLowerCase(), VOUCHER_ATTEMPT_POLICY);
             return NextResponse.json(
               { error: 'The session associated with this transfer code has already expired.' },
               { status: 400 }
             );
           }
+
+          clearRateLimit('voucher_ip', clientIp);
+          clearRateLimit('voucher_mac', macAddress.toLowerCase());
 
           const remainingMins = Math.max(1, Math.ceil(remainingSecs / 60));
           const newEndTime = new Date(now.getTime() + remainingSecs * 1000);
@@ -218,6 +269,8 @@ export async function POST(request: NextRequest) {
           return response;
         }
 
+        recordRateLimitFailure('voucher_ip', clientIp, VOUCHER_ATTEMPT_POLICY);
+        recordRateLimitFailure('voucher_mac', macAddress.toLowerCase(), VOUCHER_ATTEMPT_POLICY);
         return NextResponse.json(
           { error: 'Invalid voucher or session transfer code. Please check and try again.' },
           { status: 400 }
@@ -226,12 +279,12 @@ export async function POST(request: NextRequest) {
     } else {
       // Connecting via Inserted Coins
       // Verify exclusive coinslot lock ownership to prevent coin hijacking by other devices
-      const activeLock = getActiveLock();
+      const activeLock = getActiveLock(slotId);
       const existingToken =
         request.cookies.get('piso_session_token')?.value ||
         request.headers.get('x-session-token');
 
-      if (activeLock && !isClientLockHolder(clientIp, macAddress, existingToken)) {
+      if (activeLock && !isClientLockHolder(clientIp, macAddress, existingToken, slotId)) {
         return NextResponse.json(
           {
             error: 'COIN_SESSION_MISMATCH',
@@ -241,8 +294,19 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const { pulses } = await getDaemonCoins();
+      // Atomic coin claim: reads + zeroes pending coins + disables slot in one daemon operation
+      const claimResult = await claimDaemonCoins(slotId);
+      if (!claimResult.success) {
+        return NextResponse.json(
+          {
+            error: claimResult.error || 'Could not claim coins from hardware daemon.',
+            pulses: 0,
+          },
+          { status: 503 }
+        );
+      }
 
+      const pulses = claimResult.pulses;
       if (pulses <= 0) {
         return NextResponse.json(
           {
@@ -253,11 +317,27 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Fetch conversion rate & tiered rate brackets from settings
+      // Fetch conversion rate, standard tiers, and Night Owl promo tiers
       let minutesPerPeso = 10;
-      let ratesConfig: any[] = [];
+      let ratesConfig: RateTier[] = DEFAULT_RATE_TIERS;
+      let promoRatesConfig: RateTier[] = DEFAULT_PROMO_TIERS;
+      let promoRatesEnabled = false;
+      let promoStartHour = 22;
+      let promoEndHour = 6;
+
       const settings = await prisma.setting.findMany({
-        where: { key: { in: ['minutes_per_peso', 'rates_config'] } },
+        where: {
+          key: {
+            in: [
+              'minutes_per_peso',
+              'rates_config',
+              'promo_rates_enabled',
+              'promo_start_hour',
+              'promo_end_hour',
+              'promo_rates_config',
+            ],
+          },
+        },
       });
       for (const s of settings) {
         if (s.key === 'minutes_per_peso' && !isNaN(parseInt(s.value, 10))) {
@@ -268,15 +348,31 @@ export async function POST(request: NextRequest) {
             ratesConfig = JSON.parse(s.value);
           } catch {}
         }
+        if (s.key === 'promo_rates_enabled') {
+          promoRatesEnabled = s.value === 'true';
+        }
+        if (s.key === 'promo_start_hour' && !isNaN(parseInt(s.value, 10))) {
+          promoStartHour = parseInt(s.value, 10);
+        }
+        if (s.key === 'promo_end_hour' && !isNaN(parseInt(s.value, 10))) {
+          promoEndHour = parseInt(s.value, 10);
+        }
+        if (s.key === 'promo_rates_config') {
+          try {
+            promoRatesConfig = JSON.parse(s.value);
+          } catch {}
+        }
       }
 
+      const promoActive = promoRatesEnabled && isPromoActive(promoStartHour, promoEndHour);
+      const activeTiers = promoActive ? promoRatesConfig : ratesConfig;
+
       amountPaid = pulses;
-      durationMinutes = calculateDurationFromAmount(pulses, ratesConfig, minutesPerPeso);
+      durationMinutes = calculateDurationFromAmount(pulses, activeTiers, minutesPerPeso);
       paymentType = 'COIN';
 
-      // Reset hardware daemon coin counter and release exclusive session lock
-      await clearDaemonCoins();
-      releaseCoinLock(clientIp, macAddress, existingToken, true);
+      // Release exclusive session lock
+      releaseCoinLock(clientIp, macAddress, existingToken, true, slotId);
     }
 
     // Step 3: Record Sale in Database
@@ -310,7 +406,6 @@ export async function POST(request: NextRequest) {
       request.headers.get('x-session-code');
 
     // Find if the device already has an ACTIVE or PAUSED session
-    // Matches by MAC address or by stored sessionToken (handles MAC randomization / band switching)
     const existingSession = await prisma.session.findFirst({
       where: {
         isActive: true,
@@ -385,12 +480,10 @@ export async function POST(request: NextRequest) {
     let sessionToken: string;
 
     if (existingSession) {
-      // Extend or resume existing active/paused session
       const oldMac = existingSession.macAddress;
       sessionToken = existingSession.sessionToken || (await generateUniqueSessionToken());
 
       if (existingSession.isPaused) {
-        // Device was paused: stack purchased time on top of paused balance and unpause
         const currentPausedSeconds = existingSession.pausedRemainingSeconds || 0;
         const totalRemainingSeconds = currentPausedSeconds + durationMinutes * 60;
         sessionStartTime = now;
@@ -408,12 +501,11 @@ export async function POST(request: NextRequest) {
             sessionToken,
             transferCode,
             ipAddress: clientIp,
-            macAddress, // in case MAC changed or device switched bands
+            macAddress,
             deviceName: deviceName || existingSession.deviceName,
           },
         });
       } else {
-        // Device is currently active and unpaused: stack time onto existing endTime
         sessionStartTime = existingSession.startTime;
         sessionEndTime = new Date(existingSession.endTime.getTime() + durationMinutes * 60 * 1000);
 
@@ -426,20 +518,18 @@ export async function POST(request: NextRequest) {
             sessionToken,
             transferCode,
             ipAddress: clientIp,
-            macAddress, // in case MAC changed or device switched bands
+            macAddress,
             deviceName: deviceName || existingSession.deviceName,
           },
         });
       }
 
-      // If MAC rotated or client switched SSIDs, revoke the old MAC rule on OpenWrt
       if (oldMac.toLowerCase() !== macAddress.toLowerCase()) {
         deauthorizeClientMac(oldMac).catch((err) => {
           console.warn('[CONNECT] Notice deauthorizing previous MAC:', err);
         });
       }
     } else {
-      // Check if this device or session code previously had a session record that expired
       const previousExpiredSession = await prisma.session.findFirst({
         where: {
           OR: [
@@ -474,7 +564,6 @@ export async function POST(request: NextRequest) {
           },
         });
       } else {
-        // Create a brand new session with guaranteed UNIQUE sessionToken & transferCode
         sessionStartTime = now;
         sessionEndTime = new Date(now.getTime() + durationMinutes * 60 * 1000);
         sessionToken = await generateUniqueSessionToken();
@@ -501,6 +590,7 @@ export async function POST(request: NextRequest) {
     const remainingTotalMinutes = Math.ceil((sessionEndTime.getTime() - now.getTime()) / (60 * 1000));
     const authResult = await authorizeClientMac(macAddress, remainingTotalMinutes, clientIp, {
       amount: amountPaid,
+      slotId,
       type: paymentType,
       isNewSession: true,
       notify: true,

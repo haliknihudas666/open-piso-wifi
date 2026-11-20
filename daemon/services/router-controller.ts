@@ -75,17 +75,131 @@ export interface ConnectedClientInfo {
 
 export interface QoSStatus {
   active: boolean;
+  enabled: boolean;
   downloadMbps: number;
   uploadMbps: number;
+  downMbps: number;
+  upMbps: number;
   lanInterface: string;
   wanInterface: string;
   details: string;
+}
+
+export type ShieldOweMode = 'off' | 'transition' | 'owe_5g' | 'owe_all';
+
+export interface RouterShieldCapabilities {
+  oweSupported: boolean;
+  widsRunning: boolean;
+  clientIsolation: boolean;
+  antiTethering: boolean;
+  iotSsid?: string;
+  currentOweMode?: ShieldOweMode;
+  channel2g?: string;
+}
+
+export interface ShieldApplyConfig {
+  oweMode?: ShieldOweMode;
+  shield_owe_mode?: ShieldOweMode;
+  clientIsolation?: boolean | string;
+  shield_client_isolation?: boolean | string;
+  antiTethering?: boolean | string;
+  shield_anti_tethering?: boolean | string;
+  widsEnabled?: boolean | string;
+  shield_wids_enabled?: boolean | string;
+  iotSsid?: string;
+  shield_iot_ssid?: string;
+  iotPassphrase?: string;
+  shield_iot_passphrase?: string;
 }
 
 export interface DeviceRulesStatus {
   whitelist: string[];
   blacklist: string[];
   authorized: string[];
+}
+
+/**
+ * Validates a strict IPv4 address (4 decimal octets 0-255, no leading zeros, no shell characters).
+ */
+export function isValidIpv4(ip: string): boolean {
+  if (typeof ip !== 'string') return false;
+  const trimmed = ip.trim();
+  const match = trimmed.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return false;
+  for (let i = 1; i <= 4; i++) {
+    const part = match[i]!;
+    if (part.length > 1 && part.startsWith('0')) return false;
+    const num = Number(part);
+    if (!Number.isInteger(num) || num < 0 || num > 255) return false;
+  }
+  return true;
+}
+
+/**
+ * Validates that an IPv4 address belongs to an RFC 1918 private LAN range
+ * (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), rejecting loopback, link-local, and public IPs.
+ */
+export function isPrivateLanIpv4(ip: string): boolean {
+  if (!isValidIpv4(ip)) return false;
+  const parts = ip.trim().split('.').map(Number);
+  const a = parts[0]!;
+  const b = parts[1]!;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function stripIpv4MappedPrefix(ip: string): string {
+  return ip.trim().replace(/^::ffff:/i, '');
+}
+
+function sanitizeDomain(domain: string): string | null {
+  if (typeof domain !== 'string') return null;
+  const clean = domain.trim().toLowerCase();
+  if (!clean || clean.length > 253) return null;
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(clean)) {
+    return null;
+  }
+  return clean;
+}
+
+function sanitizeInterface(iface?: string): string | null {
+  if (typeof iface !== 'string') return null;
+  const clean = iface.trim();
+  if (!/^[a-zA-Z0-9._:-]{1,32}$/.test(clean)) return null;
+  return clean;
+}
+
+function sanitizeSsid(ssid?: string): string | null {
+  if (typeof ssid !== 'string') return null;
+  const clean = ssid.replace(/[\x00-\x1f\x7f]/g, '').trim();
+  if (!clean || clean.length > 32) return null;
+  return clean;
+}
+
+function sanitizeChannel(channel?: string): string | null {
+  if (typeof channel !== 'string') return null;
+  const clean = channel.trim().toLowerCase();
+  if (clean === 'auto') return 'auto';
+  if (!/^\d{1,3}$/.test(clean)) return null;
+  const num = Number(clean);
+  if (num < 1 || num > 196) return null;
+  return String(num);
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function parseOptionalBoolean(val: unknown): boolean | undefined {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    const lower = val.trim().toLowerCase();
+    if (lower === 'true' || lower === '1') return true;
+    if (lower === 'false' || lower === '0') return false;
+  }
+  return undefined;
 }
 
 /**
@@ -158,6 +272,27 @@ export class RouterController {
   private config: RouterConfig;
   private activeTimers = new Map<string, NodeJS.Timeout>();
   private authorizedMacs = new Set<string>();
+  private simWifiState: WifiConfig = {
+    ssid2g: 'OpenPisoWiFi',
+    ssid5g: 'OpenPisoWiFi_5G',
+    channel2g: '6',
+    channel5g: '36',
+    disabled2g: false,
+    disabled5g: false,
+  };
+  private simShieldState: RouterShieldCapabilities = {
+    oweSupported: true,
+    widsRunning: true,
+    clientIsolation: true,
+    antiTethering: false,
+    iotSsid: '',
+    currentOweMode: 'owe_5g',
+    channel2g: '6',
+  };
+  private simQosState: { downloadMbps: number; uploadMbps: number } = {
+    downloadMbps: 25,
+    uploadMbps: 10,
+  };
 
   constructor(customConfig?: Partial<RouterConfig>) {
     const isLinux = process.platform === 'linux';
@@ -177,7 +312,14 @@ export class RouterController {
   }
 
   public updateConfig(newConfig: Partial<RouterConfig>) {
-    this.config = { ...this.config, ...newConfig };
+    const sanitized: Partial<RouterConfig> = { ...newConfig };
+    if (sanitized.lanInterface !== undefined) {
+      sanitized.lanInterface = sanitizeInterface(sanitized.lanInterface) || undefined;
+    }
+    if (sanitized.wanInterface !== undefined) {
+      sanitized.wanInterface = sanitizeInterface(sanitized.wanInterface) || undefined;
+    }
+    this.config = { ...this.config, ...sanitized };
     console.log(`[ROUTER CONTROLLER] Config updated: ${this.config.host}:${this.config.port} (Mode: ${this.config.mode})`);
   }
 
@@ -295,7 +437,23 @@ export class RouterController {
       return { success: false, error: `Invalid MAC address format: "${rawMac}"` };
     }
 
-    console.log(`[ROUTER AUTH] Authorizing MAC: ${mac} for ${durationMinutes} min(s) on ${this.config.host}`);
+    if (typeof durationMinutes !== 'number' || !Number.isFinite(durationMinutes) || durationMinutes < 0) {
+      return { success: false, error: 'Invalid durationMinutes value' };
+    }
+    const safeMinutes = Math.floor(durationMinutes);
+
+    let safeIp = '';
+    if (typeof ip === 'string' && ip.trim() !== '') {
+      const candidateIp = stripIpv4MappedPrefix(ip);
+      if (!isValidIpv4(candidateIp)) {
+        return { success: false, error: `Invalid IPv4 address: "${ip}"` };
+      }
+      safeIp = candidateIp;
+    }
+
+    const safeLanIf = sanitizeInterface(this.config.lanInterface) || 'eth1';
+
+    console.log(`[ROUTER AUTH] Authorizing MAC: ${mac} for ${safeMinutes} min(s) on ${this.config.host}`);
 
     let command = '';
 
@@ -306,8 +464,8 @@ export class RouterController {
         command = `
 nft delete element inet piso_portal piso_auth { ${mac} } 2>/dev/null || true
 nft delete element inet fw4 piso_auth { ${mac} } 2>/dev/null || true
-${durationMinutes > 0 ? `nft add element inet piso_portal piso_auth { ${mac} timeout ${durationMinutes}m } 2>/dev/null || ` : ''}nft add element inet piso_portal piso_auth { ${mac} } 2>/dev/null || ${durationMinutes > 0 ? `nft add element inet fw4 piso_auth { ${mac} timeout ${durationMinutes}m } 2>/dev/null || ` : ''}nft add element inet fw4 piso_auth { ${mac} } 2>/dev/null || true
-CLIENT_IP="${ip || ''}"
+${safeMinutes > 0 ? `nft add element inet piso_portal piso_auth { ${mac} timeout ${safeMinutes}m } 2>/dev/null || ` : ''}nft add element inet piso_portal piso_auth { ${mac} } 2>/dev/null || ${safeMinutes > 0 ? `nft add element inet fw4 piso_auth { ${mac} timeout ${safeMinutes}m } 2>/dev/null || ` : ''}nft add element inet fw4 piso_auth { ${mac} } 2>/dev/null || true
+CLIENT_IP="${safeIp}"
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /proc/net/arp 2>/dev/null | awk '{print $1}' | head -n1)
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /tmp/dhcp.leases 2>/dev/null | awk '{print $3}' | head -n1)
 if [ -n "$CLIENT_IP" ]; then
@@ -323,8 +481,8 @@ fi
       case 'opennds':
         // OpenNDS captive portal daemon on OpenWrt
         command = `
-ndsctl auth ${mac} ${durationMinutes} 2>/dev/null || true
-CLIENT_IP="${ip || ''}"
+ndsctl auth ${mac} ${safeMinutes} 2>/dev/null || true
+CLIENT_IP="${safeIp}"
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /proc/net/arp 2>/dev/null | awk '{print $1}' | head -n1)
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /tmp/dhcp.leases 2>/dev/null | awk '{print $3}' | head -n1)
 if [ -n "$CLIENT_IP" ]; then
@@ -337,7 +495,7 @@ fi
         // Legacy OpenWrt fw3 / ipset
         command = `
 ipset add piso_auth ${mac} -exist 2>/dev/null || iptables -I PISO_AUTH 1 -m mac --mac-source ${mac} -j ACCEPT
-CLIENT_IP="${ip || ''}"
+CLIENT_IP="${safeIp}"
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /proc/net/arp 2>/dev/null | awk '{print $1}' | head -n1)
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /tmp/dhcp.leases 2>/dev/null | awk '{print $3}' | head -n1)
 if [ -n "$CLIENT_IP" ]; then
@@ -351,13 +509,13 @@ fi
         command = `
 nft delete element inet piso piso_auth { ${mac} } 2>/dev/null || true
 nft delete element inet piso_portal piso_auth { ${mac} } 2>/dev/null || true
-${durationMinutes > 0 ? `nft add element inet piso piso_auth { ${mac} timeout ${durationMinutes}m } 2>/dev/null || nft add element inet piso_portal piso_auth { ${mac} timeout ${durationMinutes}m } 2>/dev/null || ` : ''}nft add element inet piso piso_auth { ${mac} } 2>/dev/null || nft add element inet piso_portal piso_auth { ${mac} } 2>/dev/null || sudo iptables -I PISO_AUTH 1 -m mac --mac-source ${mac} -j ACCEPT 2>/dev/null || true
-CLIENT_IP="${ip || ''}"
+${safeMinutes > 0 ? `nft add element inet piso piso_auth { ${mac} timeout ${safeMinutes}m } 2>/dev/null || nft add element inet piso_portal piso_auth { ${mac} timeout ${safeMinutes}m } 2>/dev/null || ` : ''}nft add element inet piso piso_auth { ${mac} } 2>/dev/null || nft add element inet piso_portal piso_auth { ${mac} } 2>/dev/null || sudo iptables -I PISO_AUTH 1 -m mac --mac-source ${mac} -j ACCEPT 2>/dev/null || true
+CLIENT_IP="${safeIp}"
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /proc/net/arp 2>/dev/null | awk '{print $1}' | head -n1)
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /var/lib/misc/dnsmasq.leases 2>/dev/null | awk '{print $3}' | head -n1)
 [ -z "$CLIENT_IP" ] && CLIENT_IP=$(grep -iw "${mac}" /tmp/dnsmasq.leases 2>/dev/null | awk '{print $3}' | head -n1)
 if [ -n "$CLIENT_IP" ]; then
-  ip neigh replace "$CLIENT_IP" lladdr "${mac}" dev ${this.config.lanInterface || 'eth1'} nud permanent 2>/dev/null || true
+  ip neigh replace "$CLIENT_IP" lladdr "${mac}" dev ${safeLanIf} nud permanent 2>/dev/null || true
 fi
 if [ -n "$CLIENT_IP" ] && which conntrack >/dev/null 2>&1; then
   conntrack -D -s "$CLIENT_IP" 2>/dev/null || true
@@ -390,11 +548,11 @@ fi
     }
 
     // Schedule deauthorization timer
-    if (durationMinutes > 0) {
+    if (safeMinutes > 0) {
       const timer = setTimeout(async () => {
         console.log(`[ROUTER TIMER] Session expired for MAC ${mac}. Deauthorizing...`);
         await this.deauthorize(mac);
-      }, durationMinutes * 60 * 1000);
+      }, safeMinutes * 60 * 1000);
 
       this.activeTimers.set(mac, timer);
     } else {
@@ -414,6 +572,9 @@ fi
     options?: { kickStation?: boolean }
   ): Promise<{ success: boolean; error?: string }> {
     const mac = normalizeMac(rawMac);
+    if (!mac || mac.length !== 17) {
+      return { success: false, error: `Invalid MAC address format: "${rawMac}"` };
+    }
     console.log(`[ROUTER DEAUTH] Revoking access for MAC: ${mac} on ${this.config.host}`);
 
     // Clear scheduled timer
@@ -621,10 +782,15 @@ fi
    * Queries the OpenWrt router's ARP cache and DHCP leases to resolve an IP address to a MAC address.
    */
   public async lookupArp(clientIp: string): Promise<string | null> {
-    const cleanIp = clientIp.replace(/^.*:/, '').trim();
+    if (typeof clientIp !== 'string') return null;
+    const cleanIp = stripIpv4MappedPrefix(clientIp);
 
-    if (cleanIp === '127.0.0.1' || cleanIp === 'localhost') {
+    if (cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost') {
       return '02:00:00:00:00:01';
+    }
+
+    if (!isValidIpv4(cleanIp)) {
+      return null;
     }
 
     if (this.config.mode === 'simulation') {
@@ -633,8 +799,8 @@ fi
       return `02:00:00:00:00:${hex}`;
     }
 
-    // Try reading ARP table or DHCP leases from OpenWrt
-    const command = `grep -w "${cleanIp}" /proc/net/arp 2>/dev/null || grep -w "${cleanIp}" /tmp/dhcp.leases 2>/dev/null || true`;
+    // Try reading ARP table or DHCP leases from OpenWrt / Standalone Pi Gateway
+    const command = `grep -w "${cleanIp}" /proc/net/arp 2>/dev/null || grep -w "${cleanIp}" /tmp/dhcp.leases 2>/dev/null || grep -w "${cleanIp}" /var/lib/misc/dnsmasq.leases 2>/dev/null || grep -w "${cleanIp}" /tmp/dnsmasq.leases 2>/dev/null || true`;
     const res = await this.executeCommand(command);
 
     if (res.code === 0 && res.stdout) {
@@ -662,45 +828,80 @@ fi
     console.log(`[ROUTER SYNC] Session synchronization complete.`);
   }
 
+  private getRadioDiscoveryShellHelper(): string {
+    return `
+RADIO_2G=""
+RADIO_5G=""
+for line in $(uci -q show wireless 2>/dev/null | grep '\\.band='); do
+  r=$(printf '%s' "$line" | cut -d'.' -f2)
+  b=$(printf '%s' "$line" | cut -d'=' -f2 | tr -d "'\\"")
+  case "$b" in
+    2g|2.4g|2.4G) [ -z "$RADIO_2G" ] && RADIO_2G="$r" ;;
+    5g|5G) [ -z "$RADIO_5G" ] && RADIO_5G="$r" ;;
+  esac
+done
+[ -z "$RADIO_2G" ] && RADIO_2G="radio0"
+[ -z "$RADIO_5G" ] && RADIO_5G="radio1"
+
+find_ap_sec() {
+  dev="$1"
+  for line in $(uci -q show wireless 2>/dev/null | grep '\\.device='); do
+    sec=$(printf '%s' "$line" | cut -d'.' -f2)
+    val=$(printf '%s' "$line" | cut -d'=' -f2 | tr -d "'\\"")
+    [ "$val" != "$dev" ] && continue
+    case "$sec" in
+      piso_iot|wifinet_owe_*) continue ;;
+    esac
+    mode=$(uci -q get "wireless.$sec.mode" 2>/dev/null)
+    [ -n "$mode" ] && [ "$mode" != "ap" ] && continue
+    echo "$sec"
+    return
+  done
+}
+SEC2G=$(find_ap_sec "$RADIO_2G")
+SEC5G=$(find_ap_sec "$RADIO_5G")
+`.trim();
+  }
+
   /**
    * Retrieves active Wi-Fi configuration (SSIDs, channels, enabled state) from OpenWrt.
    */
   public async getWifiConfig(): Promise<WifiConfig> {
     if (this.config.mode === 'simulation') {
-      return {
-        ssid2g: 'OpenPisoWiFi',
-        ssid5g: 'OpenPisoWiFi_5G',
-        channel2g: '6',
-        channel5g: '36',
-        disabled2g: false,
-        disabled5g: false,
-      };
+      return { ...this.simWifiState };
     }
 
     const command = `
-# 1. Discover 2.4GHz SSID (try iw dev, then ubus, then uci)
-SSID_2G=$(iw dev phy0-ap0 info 2>/dev/null | awk '/ssid/ {print $2}')
-[ -z "$SSID_2G" ] && SSID_2G=$(ubus call network.wireless status 2>/dev/null | grep -A 10 '"radio0"' | grep -o '"ssid": *"[^"]*"' | head -n1 | cut -d'"' -f4)
-[ -z "$SSID_2G" ] && SSID_2G=$(uci -q get wireless.@wifi-iface[0].ssid || uci -q get wireless.wifinet0.ssid || uci -q get wireless.default_radio0.ssid)
-SEC2G=$(uci -q show wireless 2>/dev/null | grep -E "\\.device='?radio0" | head -n1 | cut -d'.' -f2 | cut -d'=' -f1)
-[ -z "$SSID_2G" ] && [ -n "$SEC2G" ] && SSID_2G=$(uci -q get "wireless.$SEC2G.ssid")
+${this.getRadioDiscoveryShellHelper()}
 
-# 2. Discover 5GHz SSID (try iw dev, then ubus, then uci)
-SSID_5G=$(iw dev phy1-ap0 info 2>/dev/null | awk '/ssid/ {print $2}')
-[ -z "$SSID_5G" ] && SSID_5G=$(ubus call network.wireless status 2>/dev/null | grep -A 10 '"radio1"' | grep -o '"ssid": *"[^"]*"' | head -n1 | cut -d'"' -f4)
-[ -z "$SSID_5G" ] && SSID_5G=$(uci -q get wireless.@wifi-iface[1].ssid || uci -q get wireless.wifinet1.ssid || uci -q get wireless.default_radio1.ssid)
-SEC5G=$(uci -q show wireless 2>/dev/null | grep -E "\\.device='?radio1" | head -n1 | cut -d'.' -f2 | cut -d'=' -f1)
-[ -z "$SSID_5G" ] && [ -n "$SEC5G" ] && SSID_5G=$(uci -q get "wireless.$SEC5G.ssid")
+SSID_2G=""
+[ -n "$SEC2G" ] && SSID_2G=$(uci -q get "wireless.$SEC2G.ssid" 2>/dev/null)
+[ -z "$SSID_2G" ] && SSID_2G=$(ubus call network.wireless status 2>/dev/null | grep -A 12 "\\"$RADIO_2G\\"" | grep -o '"ssid": *"[^"]*"' | head -n1 | cut -d'"' -f4)
+[ -z "$SSID_2G" ] && SSID_2G=$(uci -q get wireless.wifinet0.ssid || uci -q get wireless.default_radio0.ssid || uci -q get wireless.@wifi-iface[0].ssid)
 
-# 3. Channels and disabled states
-CHAN_2G=$(iw dev phy0-ap0 info 2>/dev/null | grep -o 'channel [0-9]\\+' | head -n1 | cut -d' ' -f2)
-[ -z "$CHAN_2G" ] && CHAN_2G=$(uci -q get wireless.radio0.channel || echo '6')
+SSID_5G=""
+[ -n "$SEC5G" ] && SSID_5G=$(uci -q get "wireless.$SEC5G.ssid" 2>/dev/null)
+[ -z "$SSID_5G" ] && SSID_5G=$(ubus call network.wireless status 2>/dev/null | grep -A 12 "\\"$RADIO_5G\\"" | grep -o '"ssid": *"[^"]*"' | head -n1 | cut -d'"' -f4)
+[ -z "$SSID_5G" ] && SSID_5G=$(uci -q get wireless.wifinet1.ssid || uci -q get wireless.default_radio1.ssid || uci -q get wireless.@wifi-iface[1].ssid)
 
-CHAN_5G=$(iw dev phy1-ap0 info 2>/dev/null | grep -o 'channel [0-9]\\+' | head -n1 | cut -d' ' -f2)
-[ -z "$CHAN_5G" ] && CHAN_5G=$(uci -q get wireless.radio1.channel || echo '36')
+CHAN_2G=""
+CHAN_5G=""
+if command -v iw >/dev/null 2>&1; then
+  for ifc in $(iw dev 2>/dev/null | awk '/Interface/ {print $2}'); do
+    info=$(iw dev "$ifc" info 2>/dev/null)
+    mhz=$(printf '%s' "$info" | grep -o '[0-9]\\+ MHz' | head -n1 | cut -d' ' -f1)
+    ch=$(printf '%s' "$info" | grep -o 'channel [0-9]\\+' | head -n1 | cut -d' ' -f2)
+    if [ -n "$mhz" ] && [ -n "$ch" ]; then
+      if [ "$mhz" -lt 3000 ] && [ -z "$CHAN_2G" ]; then CHAN_2G="$ch"; fi
+      if [ "$mhz" -ge 4900 ] && [ -z "$CHAN_5G" ]; then CHAN_5G="$ch"; fi
+    fi
+  done
+fi
+[ -z "$CHAN_2G" ] && CHAN_2G=$(uci -q get "wireless.$RADIO_2G.channel" || echo '6')
+[ -z "$CHAN_5G" ] && CHAN_5G=$(uci -q get "wireless.$RADIO_5G.channel" || echo '36')
 
-DIS_2G=$(uci -q get wireless.radio0.disabled || echo '0')
-DIS_5G=$(uci -q get wireless.radio1.disabled || echo '0')
+DIS_2G=$(uci -q get "wireless.$RADIO_2G.disabled" || echo '0')
+DIS_5G=$(uci -q get "wireless.$RADIO_5G.disabled" || echo '0')
 
 echo "SSID_2G: $SSID_2G"
 echo "SSID_5G: $SSID_5G"
@@ -721,8 +922,8 @@ echo "DIS_5G: $DIS_5G"
     }
 
     return {
-      ssid2g: map.get('SSID_2G') || 'NiconielletPisoWifi',
-      ssid5g: map.get('SSID_5G') || 'NiconielletPisoWifi_5G',
+      ssid2g: map.get('SSID_2G') || 'OpenPisoWiFi',
+      ssid5g: map.get('SSID_5G') || 'OpenPisoWiFi_5G',
       channel2g: map.get('CHAN_2G') || '6',
       channel5g: map.get('CHAN_5G') || '36',
       disabled2g: map.get('DIS_2G') === '1',
@@ -739,34 +940,54 @@ echo "DIS_5G: $DIS_5G"
     channel2g?: string;
     channel5g?: string;
   }): Promise<{ success: boolean; error?: string }> {
+    const cleanSsid2g = params.ssid2g !== undefined ? sanitizeSsid(params.ssid2g) : undefined;
+    const cleanSsid5g = params.ssid5g !== undefined ? sanitizeSsid(params.ssid5g) : undefined;
+    const cleanChan2g = params.channel2g !== undefined ? sanitizeChannel(params.channel2g) : undefined;
+    const cleanChan5g = params.channel5g !== undefined ? sanitizeChannel(params.channel5g) : undefined;
+
+    if (params.ssid2g !== undefined && !cleanSsid2g) {
+      return { success: false, error: 'Invalid 2.4GHz SSID (1-32 characters)' };
+    }
+    if (params.ssid5g !== undefined && !cleanSsid5g) {
+      return { success: false, error: 'Invalid 5GHz SSID (1-32 characters)' };
+    }
+    if (params.channel2g !== undefined && !cleanChan2g) {
+      return { success: false, error: 'Invalid 2.4GHz channel' };
+    }
+    if (params.channel5g !== undefined && !cleanChan5g) {
+      return { success: false, error: 'Invalid 5GHz channel' };
+    }
+
     if (this.config.mode === 'simulation') {
-      console.log('[SIMULATOR] Wi-Fi config updated:', params);
+      if (cleanSsid2g) this.simWifiState.ssid2g = cleanSsid2g;
+      if (cleanSsid5g) this.simWifiState.ssid5g = cleanSsid5g;
+      if (cleanChan2g) this.simWifiState.channel2g = cleanChan2g;
+      if (cleanChan5g) this.simWifiState.channel5g = cleanChan5g;
+      console.log('[SIMULATOR] Wi-Fi config updated:', this.simWifiState);
       return { success: true };
     }
 
-    const cmds: string[] = [];
-    if (params.ssid2g) {
-      const s2 = params.ssid2g.trim().replace(/'/g, '');
-      cmds.push(`uci -q set wireless.@wifi-iface[0].ssid='${s2}' || uci -q set wireless.wifinet0.ssid='${s2}'`);
+    const cmds: string[] = [this.getRadioDiscoveryShellHelper()];
+    if (cleanSsid2g) {
+      const q2 = shellSingleQuote(cleanSsid2g);
+      cmds.push(`if [ -n "$SEC2G" ]; then uci -q set "wireless.$SEC2G.ssid"=${q2}; else uci -q set wireless.@wifi-iface[0].ssid=${q2} || uci -q set wireless.wifinet0.ssid=${q2}; fi`);
     }
-    if (params.ssid5g) {
-      const s5 = params.ssid5g.trim().replace(/'/g, '');
-      cmds.push(`uci -q set wireless.@wifi-iface[1].ssid='${s5}' || uci -q set wireless.wifinet1.ssid='${s5}'`);
+    if (cleanSsid5g) {
+      const q5 = shellSingleQuote(cleanSsid5g);
+      cmds.push(`if [ -n "$SEC5G" ]; then uci -q set "wireless.$SEC5G.ssid"=${q5}; else uci -q set wireless.@wifi-iface[1].ssid=${q5} || uci -q set wireless.wifinet1.ssid=${q5}; fi`);
     }
-    if (params.channel2g) {
-      const c2 = params.channel2g.trim().replace(/[^a-zA-Z0-9]/g, '');
-      cmds.push(`uci -q set wireless.radio0.channel='${c2}'`);
+    if (cleanChan2g) {
+      cmds.push(`uci -q set "wireless.$RADIO_2G.channel"=${shellSingleQuote(cleanChan2g)}`);
     }
-    if (params.channel5g) {
-      const c5 = params.channel5g.trim().replace(/[^a-zA-Z0-9]/g, '');
-      cmds.push(`uci -q set wireless.radio1.channel='${c5}'`);
+    if (cleanChan5g) {
+      cmds.push(`uci -q set "wireless.$RADIO_5G.channel"=${shellSingleQuote(cleanChan5g)}`);
     }
 
     cmds.push('uci commit wireless');
     // Reload Wi-Fi with a 1-second delay in the background so the SSH session and HTTP response complete cleanly
     cmds.push('(sleep 1 && wifi reload) >/dev/null 2>&1 &');
 
-    const fullCommand = cmds.join(' && ');
+    const fullCommand = cmds.join('\n');
     const res = await this.executeCommand(fullCommand);
 
     if (res.code !== 0) {
@@ -790,7 +1011,7 @@ echo "DIS_5G: $DIS_5G"
   }
 
   /**
-   * Flushes all active authorized MAC addresses from OpenWrt firewall set.
+   * Flushes all active authorized MAC addresses from OpenWrt / Pi Gateway firewall set.
    */
   public async flushAuthTable(): Promise<{ success: boolean; error?: string }> {
     this.authorizedMacs.clear();
@@ -799,10 +1020,14 @@ echo "DIS_5G: $DIS_5G"
     }
     this.activeTimers.clear();
 
+    const safeLanIf = sanitizeInterface(this.config.lanInterface) || 'eth1';
     const command = `
-nft flush set inet piso_portal piso_auth 2>/dev/null || nft flush set inet fw4 piso_auth 2>/dev/null || true
+nft flush set inet piso_portal piso_auth 2>/dev/null || true
+nft flush set inet piso piso_auth 2>/dev/null || true
+nft flush set inet fw4 piso_auth 2>/dev/null || true
 which conntrack >/dev/null 2>&1 && conntrack -F 2>/dev/null || true
 ip neigh flush dev br-lan nud permanent 2>/dev/null || true
+ip neigh flush dev ${safeLanIf} nud permanent 2>/dev/null || true
     `.trim();
     const res = await this.executeCommand(command);
     return { success: res.code === 0, error: res.code === 0 ? undefined : res.stderr };
@@ -967,6 +1192,7 @@ echo "DHCP_COUNT: $(
     }
 
     const command = `
+${this.getRadioDiscoveryShellHelper()}
 echo "=== WIRELESS_IFACES ==="
 IFACES=""
 if command -v iw >/dev/null 2>&1; then
@@ -992,13 +1218,13 @@ for iface in $IFACES; do
   band=""
   if command -v iw >/dev/null 2>&1; then
     info=$(iw dev "$iface" info 2>/dev/null)
-    mhz=$(echo "$info" | grep -o '[0-9]\+ MHz' | head -n1 | cut -d' ' -f1)
+    mhz=$(echo "$info" | grep -o '[0-9]\\+ MHz' | head -n1 | cut -d' ' -f1)
     if [ -n "$mhz" ]; then
       if [ "$mhz" -lt 3000 ]; then band="2.4GHz"; fi
       if [ "$mhz" -ge 4900 ]; then band="5GHz"; fi
     fi
     if [ -z "$band" ]; then
-      chan=$(echo "$info" | grep -o 'channel [0-9]\+' | head -n1 | cut -d' ' -f2)
+      chan=$(echo "$info" | grep -o 'channel [0-9]\\+' | head -n1 | cut -d' ' -f2)
       if [ -n "$chan" ]; then
         if [ "$chan" -le 14 ]; then band="2.4GHz"; fi
         if [ "$chan" -ge 36 ]; then band="5GHz"; fi
@@ -1007,8 +1233,8 @@ for iface in $IFACES; do
   fi
   if [ -z "$band" ] && command -v iwinfo >/dev/null 2>&1; then
     iw_out=$(iwinfo "$iface" info 2>/dev/null)
-    if echo "$iw_out" | grep -iq '2\.[0-9]\+ GHz'; then band="2.4GHz"; fi
-    if echo "$iw_out" | grep -iq '5\.[0-9]\+ GHz'; then band="5GHz"; fi
+    if echo "$iw_out" | grep -iq '2\\.[0-9]\\+ GHz'; then band="2.4GHz"; fi
+    if echo "$iw_out" | grep -iq '5\\.[0-9]\\+ GHz'; then band="5GHz"; fi
   fi
   if [ -z "$band" ]; then
     if echo "$iface" | grep -Eq 'phy1|radio1|wlan1|5g'; then
@@ -1017,8 +1243,8 @@ for iface in $IFACES; do
       band="2.4GHz"
     fi
   fi
-  radio="radio0"
-  [ "$band" = "5GHz" ] && radio="radio1"
+  radio="$RADIO_2G"
+  [ "$band" = "5GHz" ] && radio="$RADIO_5G"
 
   echo "IFACE:$iface:$band:$radio"
   if command -v iw >/dev/null 2>&1; then
@@ -1033,7 +1259,7 @@ for iface in $IFACES; do
 done
 
 echo "=== DHCP_LEASES ==="
-cat /tmp/dhcp.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || cat /var/run/dhcp.leases 2>/dev/null || true
+cat /tmp/dhcp.leases 2>/dev/null || cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || cat /var/run/dhcp.leases 2>/dev/null || true
 
 echo "=== ARP_CACHE ==="
 cat /proc/net/arp 2>/dev/null || true
@@ -1042,11 +1268,17 @@ echo "=== BRCTL_MACS ==="
 brctl showmacs br-lan 2>/dev/null || true
 
 echo "=== NFT_SETS ==="
-nft list set inet piso_portal piso_auth 2>/dev/null || nft list set inet fw4 piso_auth 2>/dev/null || true
+nft list set inet piso_portal piso_auth 2>/dev/null || true
+nft list set inet piso piso_auth 2>/dev/null || true
+nft list set inet fw4 piso_auth 2>/dev/null || true
 echo "--- WHITELIST ---"
-nft list set inet piso_portal piso_whitelist 2>/dev/null || nft list set inet fw4 piso_whitelist 2>/dev/null || true
+nft list set inet piso_portal piso_whitelist 2>/dev/null || true
+nft list set inet piso piso_whitelist 2>/dev/null || true
+nft list set inet fw4 piso_whitelist 2>/dev/null || true
 echo "--- BLACKLIST ---"
-nft list set inet piso_portal piso_blacklist 2>/dev/null || nft list set inet fw4 piso_blacklist 2>/dev/null || true
+nft list set inet piso_portal piso_blacklist 2>/dev/null || true
+nft list set inet piso piso_blacklist 2>/dev/null || true
+nft list set inet fw4 piso_blacklist 2>/dev/null || true
     `.trim();
 
     const res = await this.executeCommand(command);
@@ -1251,19 +1483,32 @@ nft list set inet piso_portal piso_blacklist 2>/dev/null || nft list set inet fw
     const mac = normalizeMac(rawMac);
     if (!mac || mac.length !== 17) return { success: false, error: 'Invalid MAC address' };
 
+    let safeIp = '';
+    if (typeof ipHint === 'string' && ipHint.trim() !== '') {
+      const candidateIp = stripIpv4MappedPrefix(ipHint);
+      if (!isValidIpv4(candidateIp)) {
+        return { success: false, error: `Invalid IPv4 address: "${ipHint}"` };
+      }
+      safeIp = candidateIp;
+    }
+
     if (this.config.mode === 'simulation') {
       console.log(`[SIMULATOR] Whitelisted MAC: ${mac}`);
       return { success: true };
     }
 
     const command = `
-nft add element inet piso piso_whitelist { ${mac} } 2>/dev/null || nft add element inet piso_portal piso_whitelist { ${mac} } 2>/dev/null || nft add element inet fw4 piso_whitelist { ${mac} } 2>/dev/null || true
-touch /etc/config/piso_devices 2>/dev/null || true
-uci -q get piso_devices.whitelist >/dev/null || uci set piso_devices.whitelist=devices 2>/dev/null || true
-uci add_list piso_devices.whitelist.mac="${mac}" 2>/dev/null || true
-uci commit piso_devices 2>/dev/null || true
+nft add element inet piso piso_whitelist { ${mac} } 2>/dev/null || true
+nft add element inet piso_portal piso_whitelist { ${mac} } 2>/dev/null || true
+nft add element inet fw4 piso_whitelist { ${mac} } 2>/dev/null || true
+if command -v uci >/dev/null 2>&1; then
+  touch /etc/config/piso_devices 2>/dev/null || true
+  uci -q get piso_devices.whitelist >/dev/null || uci set piso_devices.whitelist=devices 2>/dev/null || true
+  uci add_list piso_devices.whitelist.mac="${mac}" 2>/dev/null || true
+  uci commit piso_devices 2>/dev/null || true
+fi
 # Flush any active conntrack DNAT mappings for the client so internet works immediately
-${ipHint ? `which conntrack >/dev/null 2>&1 && (conntrack -D -s ${ipHint} 2>/dev/null || conntrack -D -d ${ipHint} 2>/dev/null) || true` : ''}
+${safeIp ? `which conntrack >/dev/null 2>&1 && (conntrack -D -s ${safeIp} 2>/dev/null || conntrack -D -d ${safeIp} 2>/dev/null) || true` : ''}
 which conntrack >/dev/null 2>&1 && conntrack -D -m ${mac} 2>/dev/null || true
     `.trim();
 
@@ -1343,7 +1588,7 @@ uci commit piso_devices 2>/dev/null || true
   }
 
   /**
-   * Bulk syncs Whitelist and Blacklist sets to OpenWrt router.
+   * Bulk syncs Whitelist and Blacklist sets to OpenWrt / Standalone Pi Gateway firewall.
    */
   public async syncDeviceRules(whitelist: string[], blacklist: string[]): Promise<void> {
     console.log(`[ROUTER RULES] Syncing ${whitelist.length} whitelisted and ${blacklist.length} blacklisted MACs to ${this.config.host}...`);
@@ -1358,16 +1603,15 @@ uci commit piso_devices 2>/dev/null || true
 
     const cmds: string[] = [
       'nft flush set inet piso_portal piso_whitelist 2>/dev/null || true',
+      'nft flush set inet piso piso_whitelist 2>/dev/null || true',
       'nft flush set inet piso_portal piso_blacklist 2>/dev/null || true',
-      'touch /etc/config/piso_devices 2>/dev/null || true',
-      'uci -q delete piso_devices.whitelist 2>/dev/null || true',
-      'uci -q delete piso_devices.blacklist 2>/dev/null || true',
-      'uci set piso_devices.whitelist=devices 2>/dev/null || true',
-      'uci set piso_devices.blacklist=devices 2>/dev/null || true',
+      'nft flush set inet piso piso_blacklist 2>/dev/null || true',
+      'if command -v uci >/dev/null 2>&1; then touch /etc/config/piso_devices 2>/dev/null || true; uci -q delete piso_devices.whitelist 2>/dev/null || true; uci -q delete piso_devices.blacklist 2>/dev/null || true; uci set piso_devices.whitelist=devices 2>/dev/null || true; uci set piso_devices.blacklist=devices 2>/dev/null || true; fi',
     ];
 
     if (cleanWhite.length > 0) {
       cmds.push(`nft add element inet piso_portal piso_whitelist { ${cleanWhite.join(', ')} } 2>/dev/null || true`);
+      cmds.push(`nft add element inet piso piso_whitelist { ${cleanWhite.join(', ')} } 2>/dev/null || true`);
       for (const w of cleanWhite) {
         cmds.push(`uci add_list piso_devices.whitelist.mac="${w}" 2>/dev/null || true`);
       }
@@ -1375,6 +1619,7 @@ uci commit piso_devices 2>/dev/null || true
 
     if (cleanBlack.length > 0) {
       cmds.push(`nft add element inet piso_portal piso_blacklist { ${cleanBlack.join(', ')} } 2>/dev/null || true`);
+      cmds.push(`nft add element inet piso piso_blacklist { ${cleanBlack.join(', ')} } 2>/dev/null || true`);
       for (const b of cleanBlack) {
         cmds.push(`uci add_list piso_devices.blacklist.mac="${b}" 2>/dev/null || true`);
       }
@@ -1386,7 +1631,7 @@ uci commit piso_devices 2>/dev/null || true
   }
 
   /**
-   * Gets current state of OpenWrt firewall sets (whitelist, blacklist, authorized).
+   * Gets current state of OpenWrt / Pi Gateway firewall sets (whitelist, blacklist, authorized).
    */
   public async getDeviceRulesStatus(): Promise<DeviceRulesStatus> {
     if (this.config.mode === 'simulation') {
@@ -1399,11 +1644,17 @@ uci commit piso_devices 2>/dev/null || true
 
     const command = `
 echo "=== AUTH ==="
-nft list set inet piso_portal piso_auth 2>/dev/null || nft list set inet fw4 piso_auth 2>/dev/null || true
+nft list set inet piso_portal piso_auth 2>/dev/null || true
+nft list set inet piso piso_auth 2>/dev/null || true
+nft list set inet fw4 piso_auth 2>/dev/null || true
 echo "=== WHITELIST ==="
-nft list set inet piso_portal piso_whitelist 2>/dev/null || nft list set inet fw4 piso_whitelist 2>/dev/null || true
+nft list set inet piso_portal piso_whitelist 2>/dev/null || true
+nft list set inet piso piso_whitelist 2>/dev/null || true
+nft list set inet fw4 piso_whitelist 2>/dev/null || true
 echo "=== BLACKLIST ==="
-nft list set inet piso_portal piso_blacklist 2>/dev/null || nft list set inet fw4 piso_blacklist 2>/dev/null || true
+nft list set inet piso_portal piso_blacklist 2>/dev/null || true
+nft list set inet piso piso_blacklist 2>/dev/null || true
+nft list set inet fw4 piso_blacklist 2>/dev/null || true
     `.trim();
 
     const res = await this.executeCommand(command);
@@ -1425,18 +1676,35 @@ nft list set inet piso_portal piso_blacklist 2>/dev/null || nft list set inet fw
     };
   }
 
+  private parseTcMbps(sectionText: string): number {
+    const match =
+      sectionText.match(/bandwidth\s+([0-9]+(?:\.[0-9]+)?)\s*([KMG])?bit/i) ||
+      sectionText.match(/rate\s+([0-9]+(?:\.[0-9]+)?)\s*([KMG])?bit/i);
+    if (!match || !match[1]) return 0;
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || 'M').toUpperCase();
+    if (unit === 'G') return Math.round(value * 1000);
+    if (unit === 'K') return Math.round(value / 1000);
+    return Math.round(value);
+  }
+
   /**
-   * Applies bandwidth rate-limiting / QoS directly to OpenWrt LAN (br-lan) and WAN interface.
+   * Applies bandwidth rate-limiting / QoS directly to OpenWrt LAN (br-lan) and WAN interface,
+   * persisting settings to /etc/config/piso_qos via uci.
    */
   public async applySpeedLimit(downloadMbps: number, uploadMbps: number): Promise<{ success: boolean; error?: string }> {
-    const downMbit = Math.max(0, Math.round(downloadMbps));
-    const upMbit = Math.max(0, Math.round(uploadMbps));
+    const downMbit = Number.isFinite(downloadMbps) ? Math.max(0, Math.round(downloadMbps)) : 0;
+    const upMbit = Number.isFinite(uploadMbps) ? Math.max(0, Math.round(uploadMbps)) : 0;
 
     console.log(`[ROUTER QoS] Configuring Speed Limiter: ${downMbit} Mbps Down / ${upMbit} Mbps Up on ${this.config.host}`);
 
     if (this.config.mode === 'simulation') {
+      this.simQosState = { downloadMbps: downMbit, uploadMbps: upMbit };
       return { success: true };
     }
+
+    const configuredLanIf = sanitizeInterface(this.config.lanInterface) || '';
+    const configuredWanIf = sanitizeInterface(this.config.wanInterface) || '';
 
     const command = `
 # 1. Disable firewall flow offloading so traffic control is not bypassed
@@ -1444,33 +1712,47 @@ uci set firewall.@defaults[0].flow_offloading='0' 2>/dev/null || true
 uci set firewall.@defaults[0].flow_offloading_hw='0' 2>/dev/null || true
 uci commit firewall 2>/dev/null || true
 
-# 2. Discover active WAN interface dynamically
-WAN_IF=$(uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5}' || echo "wan")
+# 2. Discover active LAN & WAN interfaces dynamically
+LAN_IF=${shellSingleQuote(configuredLanIf)}
+if [ -z "$LAN_IF" ]; then
+  if ip link show br-lan >/dev/null 2>&1; then LAN_IF="br-lan"; else LAN_IF="eth1"; fi
+fi
+WAN_IF=${shellSingleQuote(configuredWanIf)}
+[ -z "$WAN_IF" ] && WAN_IF=$(uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5; exit}' || echo "wan")
 
-# 3. Apply Traffic Control rules
-if [ "${downMbit}" -le 0 ] && [ "${upMbit}" -le 0 ]; then
-  # Unlimited mode: Clear qdiscs
-  tc qdisc del dev br-lan root 2>/dev/null || true
-  [ -n "$WAN_IF" ] && tc qdisc del dev "$WAN_IF" root 2>/dev/null || true
-  echo "QOS_CLEARED"
+# 3. Persist settings to /etc/config/piso_qos via uci
+if command -v uci >/dev/null 2>&1; then
+  touch /etc/config/piso_qos 2>/dev/null || true
+  uci set piso_qos.settings=qos 2>/dev/null || true
+  uci set piso_qos.settings.download_mbps='${downMbit}' 2>/dev/null || true
+  uci set piso_qos.settings.upload_mbps='${upMbit}' 2>/dev/null || true
+  uci set piso_qos.settings.wan_if="$WAN_IF" 2>/dev/null || true
+  uci commit piso_qos 2>/dev/null || true
+fi
+
+# 4. Apply Traffic Control rules
+if [ "${downMbit}" -le 0 ]; then
+  tc qdisc del dev "$LAN_IF" root 2>/dev/null || true
 else
-  # Download Limiting (Egress on br-lan to clients)
-  if [ "${downMbit}" -gt 0 ]; then
-    tc qdisc del dev br-lan root 2>/dev/null || true
-    tc qdisc add dev br-lan root cake bandwidth ${downMbit}mbit 2>/dev/null || \
-    tc qdisc add dev br-lan root handle 1: tbf rate ${downMbit}mbit burst 64kb latency 50ms 2>/dev/null || \
-    tc qdisc add dev br-lan root handle 1: fq_codel 2>/dev/null || true
-  fi
+  tc qdisc del dev "$LAN_IF" root 2>/dev/null || true
+  tc qdisc add dev "$LAN_IF" root cake bandwidth ${downMbit}mbit besteffort dual-dsthost nat 2>/dev/null || \
+  tc qdisc add dev "$LAN_IF" root cake bandwidth ${downMbit}mbit 2>/dev/null || \
+  tc qdisc add dev "$LAN_IF" root handle 1: tbf rate ${downMbit}mbit burst 64kb latency 50ms 2>/dev/null || \
+  tc qdisc add dev "$LAN_IF" root handle 1: fq_codel 2>/dev/null || true
+fi
 
-  # Upload Limiting (Egress on WAN interface to internet)
-  if [ "${upMbit}" -gt 0 ] && [ -n "$WAN_IF" ]; then
+if [ "${upMbit}" -le 0 ]; then
+  [ -n "$WAN_IF" ] && tc qdisc del dev "$WAN_IF" root 2>/dev/null || true
+else
+  if [ -n "$WAN_IF" ]; then
     tc qdisc del dev "$WAN_IF" root 2>/dev/null || true
+    tc qdisc add dev "$WAN_IF" root cake bandwidth ${upMbit}mbit besteffort dual-srchost nat 2>/dev/null || \
     tc qdisc add dev "$WAN_IF" root cake bandwidth ${upMbit}mbit 2>/dev/null || \
     tc qdisc add dev "$WAN_IF" root handle 1: tbf rate ${upMbit}mbit burst 64kb latency 50ms 2>/dev/null || true
   fi
-
-  echo "QOS_APPLIED: DOWN=${downMbit}M UP=${upMbit}M WAN=$WAN_IF"
 fi
+
+echo "QOS_APPLIED: DOWN=${downMbit}M UP=${upMbit}M LAN=$LAN_IF WAN=$WAN_IF"
     `.trim();
 
     const res = await this.executeCommand(command);
@@ -1483,46 +1765,83 @@ fi
   }
 
   /**
-   * Gets live OpenWrt Traffic Control (QoS) status.
+   * Gets live OpenWrt Traffic Control (QoS) status across BOTH LAN and WAN interfaces.
    */
   public async getQoSStatus(): Promise<QoSStatus> {
     if (this.config.mode === 'simulation') {
+      const simActive = this.simQosState.downloadMbps > 0 || this.simQosState.uploadMbps > 0;
       return {
-        active: true,
-        downloadMbps: 25,
-        uploadMbps: 10,
+        active: simActive,
+        enabled: simActive,
+        downloadMbps: this.simQosState.downloadMbps,
+        uploadMbps: this.simQosState.uploadMbps,
+        downMbps: this.simQosState.downloadMbps,
+        upMbps: this.simQosState.uploadMbps,
         lanInterface: 'br-lan',
         wanInterface: 'wan',
-        details: 'Simulated CAKE / TBF QoS active on br-lan and wan',
+        details: simActive
+          ? `Simulated CAKE QoS active (${this.simQosState.downloadMbps}M down / ${this.simQosState.uploadMbps}M up)`
+          : 'Simulated QoS unlimited (no qdisc limit)',
       };
     }
 
+    const configuredLanIf = sanitizeInterface(this.config.lanInterface) || '';
+    const configuredWanIf = sanitizeInterface(this.config.wanInterface) || '';
+
     const command = `
-WAN_IF=$(uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5}' || echo "wan")
+LAN_IF=${shellSingleQuote(configuredLanIf)}
+if [ -z "$LAN_IF" ]; then
+  if ip link show br-lan >/dev/null 2>&1; then LAN_IF="br-lan"; else LAN_IF="eth1"; fi
+fi
+WAN_IF=${shellSingleQuote(configuredWanIf)}
+[ -z "$WAN_IF" ] && WAN_IF=$(uci -q get piso_qos.settings.wan_if || uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5; exit}' || echo "wan")
 echo "=== LAN_QDISC ==="
-tc -s qdisc show dev br-lan 2>/dev/null || true
+tc -s qdisc show dev "$LAN_IF" 2>/dev/null || true
 echo "=== WAN_QDISC ==="
 [ -n "$WAN_IF" ] && tc -s qdisc show dev "$WAN_IF" 2>/dev/null || true
+echo "=== LAN_IF ==="
+echo "$LAN_IF"
 echo "=== WAN_IF ==="
 echo "$WAN_IF"
+echo "=== UCI_QOS ==="
+echo "DOWN=$(uci -q get piso_qos.settings.download_mbps || echo 0)"
+echo "UP=$(uci -q get piso_qos.settings.upload_mbps || echo 0)"
     `.trim();
 
     const res = await this.executeCommand(command);
     const output = res.stdout || '';
 
-    const hasLanQos = output.includes('cake') || output.includes('tbf') || output.includes('fq_codel');
-    const wanIf = output.split('=== WAN_IF ===')[1]?.trim() || 'wan';
+    const lanSection = output.split('=== LAN_QDISC ===')[1]?.split('=== WAN_QDISC ===')[0] || '';
+    const wanSection = output.split('=== WAN_QDISC ===')[1]?.split('=== LAN_IF ===')[0] || '';
+    const lanIf = output.split('=== LAN_IF ===')[1]?.split('=== WAN_IF ===')[0]?.trim() || 'br-lan';
+    const wanIf = output.split('=== WAN_IF ===')[1]?.split('=== UCI_QOS ===')[0]?.trim() || 'wan';
+    const uciSection = output.split('=== UCI_QOS ===')[1] || '';
 
-    // Parse download rate if available
-    let downMbps = 0;
-    const downMatch = output.match(/rate\s+([0-9]+)Mbit/i) || output.match(/bandwidth\s+([0-9]+)Mbit/i);
-    if (downMatch && downMatch[1]) downMbps = parseInt(downMatch[1], 10);
+    const hasQdisc = (s: string) => /\b(cake|tbf|fq_codel|htb)\b/i.test(s);
+    const hasLanQos = hasQdisc(lanSection);
+    const hasWanQos = hasQdisc(wanSection);
+    const active = hasLanQos || hasWanQos;
+
+    let downMbps = this.parseTcMbps(lanSection);
+    let upMbps = this.parseTcMbps(wanSection);
+
+    if (downMbps === 0 && hasLanQos) {
+      const m = uciSection.match(/DOWN=(\d+)/);
+      if (m && m[1]) downMbps = parseInt(m[1], 10);
+    }
+    if (upMbps === 0 && hasWanQos) {
+      const m = uciSection.match(/UP=(\d+)/);
+      if (m && m[1]) upMbps = parseInt(m[1], 10);
+    }
 
     return {
-      active: hasLanQos,
+      active,
+      enabled: active,
       downloadMbps: downMbps,
-      uploadMbps: 0,
-      lanInterface: 'br-lan',
+      uploadMbps: upMbps,
+      downMbps,
+      upMbps,
+      lanInterface: lanIf,
       wanInterface: wanIf,
       details: output.replace(/=== [A-Z_]+ ===/g, '').trim(),
     };
@@ -1563,44 +1882,60 @@ echo "$WAN_IF"
 
   /**
    * Updates OpenWrt dnsmasq to resolve a custom local domain (e.g. wifi.local or pisowifi.net)
-   * to the captive portal IP, and updates DHCP option 114/160 for RFC captive discovery.
+   * to the captive portal IP, while preserving existing DHCP options 121/249 and avoiding options 114/160.
    */
   public async setPortalDns(
     domain: string,
     portalIp: string,
     routerIp?: string
   ): Promise<{ success: boolean; error?: string }> {
+    const cleanDomain = sanitizeDomain(domain);
+    const cleanPortalIp = stripIpv4MappedPrefix(portalIp);
+    if (!cleanDomain) {
+      return { success: false, error: 'Invalid portal domain name' };
+    }
+    if (!isValidIpv4(cleanPortalIp)) {
+      return { success: false, error: `Invalid Portal IPv4 address: "${portalIp}"` };
+    }
+    if (routerIp !== undefined && routerIp.trim() !== '') {
+      const cleanRouterIp = stripIpv4MappedPrefix(routerIp);
+      if (!isValidIpv4(cleanRouterIp)) {
+        return { success: false, error: `Invalid Router IPv4 address: "${routerIp}"` };
+      }
+    }
+
     if (this.config.mode === 'simulation') {
-      console.log(`[SIMULATOR] setPortalDns: Domain="${domain}" -> Portal="${portalIp}" (Gateway="${routerIp || this.config.host}")`);
+      console.log(`[SIMULATOR] setPortalDns: Domain="${cleanDomain}" -> Portal="${cleanPortalIp}" (Gateway="${routerIp || this.config.host}")`);
       return { success: true };
     }
 
-    const cleanDomain = domain.trim().toLowerCase().replace(/[^a-z0-9.-]/g, '');
-    const cleanPortalIp = portalIp.trim();
-    if (!cleanDomain || !cleanPortalIp) {
-      return { success: false, error: 'Domain and Portal IP must not be empty' };
-    }
+    const escapedDomainRegex = cleanDomain.replace(/\./g, '\\.');
 
     const command = `
 uci -q delete dhcp.piso_domain
 uci set dhcp.piso_domain=domain
-uci set dhcp.piso_domain.name="${cleanDomain}"
-uci set dhcp.piso_domain.ip="${cleanPortalIp}"
+uci set dhcp.piso_domain.name=${shellSingleQuote(cleanDomain)}
+uci set dhcp.piso_domain.ip=${shellSingleQuote(cleanPortalIp)}
 
 # Add wildcard address mapping & allow rebind
 uci -q del_list dhcp.@dnsmasq[0].address="/${cleanDomain}/${cleanPortalIp}"
 uci add_list dhcp.@dnsmasq[0].address="/${cleanDomain}/${cleanPortalIp}"
-uci -q del_list dhcp.@dnsmasq[0].rebind_domain="${cleanDomain}"
-uci add_list dhcp.@dnsmasq[0].rebind_domain="${cleanDomain}"
+uci -q del_list dhcp.@dnsmasq[0].rebind_domain=${shellSingleQuote(cleanDomain)}
+uci add_list dhcp.@dnsmasq[0].rebind_domain=${shellSingleQuote(cleanDomain)}
 
 # Update /etc/hosts for bulletproof local resolution (overrides RFC 6761 null sinks)
-grep -q "${cleanDomain}" /etc/hosts 2>/dev/null || echo "${cleanPortalIp} ${cleanDomain}" >> /etc/hosts
-sed -i "s/.*${cleanDomain}.*/${cleanPortalIp} ${cleanDomain}/" /etc/hosts 2>/dev/null || true
+grep -qE "(^|[[:space:]])${escapedDomainRegex}([[:space:]]|$)" /etc/hosts 2>/dev/null || echo "${cleanPortalIp} ${cleanDomain}" >> /etc/hosts
+sed -i -E "s/.*[[:space:]]${escapedDomainRegex}([[:space:]]|$)/${cleanPortalIp} ${cleanDomain}/" /etc/hosts 2>/dev/null || true
 
-# Captive Portal RFC 8908/7710 discovery
-uci -q delete dhcp.lan.dhcp_option
-uci add_list dhcp.lan.dhcp_option="114,http://${cleanDomain}:3000/"
-uci add_list dhcp.lan.dhcp_option="160,http://${cleanDomain}:3000/"
+# Remove legacy DHCP options 114/160 (break Apple CNA) while preserving options 121/249
+EXISTING_OPTS=$(uci -q get dhcp.lan.dhcp_option || true)
+for opt in $EXISTING_OPTS; do
+  case "$opt" in
+    114,*|160,*)
+      uci -q del_list dhcp.lan.dhcp_option="$opt" 2>/dev/null || true
+      ;;
+  esac
+done
 
 uci commit dhcp
 /etc/init.d/dnsmasq restart 2>/dev/null || true
@@ -1784,6 +2119,472 @@ done
     }
 
     return { ok: true, macs: Array.from(macSet) };
+  }
+
+  /**
+   * Probes router OpenPiso Shield capabilities & current hardware security posture.
+   */
+  public async getShieldCapabilities(): Promise<RouterShieldCapabilities> {
+    if (this.config.mode === 'simulation') {
+      return { ...this.simShieldState };
+    }
+
+    if (this.config.mode === 'local' || this.config.mode === 'local_linux') {
+      const cmd = `
+ANTI_TETH=0
+if nft list chain inet piso_shield anti_tethering >/dev/null 2>&1 || nft list table inet piso_portal 2>/dev/null | grep -q 'ip ttl set 1'; then
+  ANTI_TETH=1
+fi
+echo "ANTI_TETH=$ANTI_TETH"
+      `.trim();
+      const res = await this.executeCommand(cmd);
+      const antiTethering = /ANTI_TETH=1/.test(res.stdout || '');
+      return {
+        oweSupported: false,
+        widsRunning: false,
+        clientIsolation: false,
+        antiTethering,
+        iotSsid: undefined,
+      };
+    }
+
+    const command = `
+${this.getRadioDiscoveryShellHelper()}
+
+OWE_OK=0
+if [ -f /lib/netifd/hostapd.sh ] && grep -q 'owe' /lib/netifd/hostapd.sh 2>/dev/null; then
+  if [ -f /usr/lib/opkg/status ]; then
+    grep -qiE '^Package: wpad-(openssl|wolfssl|mbedtls|mesh|basic-(openssl|wolfssl|mbedtls))' /usr/lib/opkg/status && OWE_OK=1
+  elif command -v apk >/dev/null 2>&1; then
+    apk info 2>/dev/null | grep -qiE '^wpad-(openssl|wolfssl|mbedtls|mesh|basic)' && OWE_OK=1
+  fi
+  if [ "$OWE_OK" -eq 0 ] && command -v wpad >/dev/null 2>&1 && grep -q 'owe_transition' /usr/sbin/wpad 2>/dev/null; then
+    OWE_OK=1
+  fi
+fi
+
+WIDS_RUN=0
+if pgrep -f 'piso-wids' >/dev/null 2>&1; then
+  WIDS_RUN=1
+elif [ -x /etc/init.d/piso-wids ] && /etc/init.d/piso-wids status 2>/dev/null | grep -iq 'running'; then
+  WIDS_RUN=1
+fi
+
+ISO_2G=$([ -n "$SEC2G" ] && uci -q get "wireless.$SEC2G.isolate" || echo '0')
+ISO_5G=$([ -n "$SEC5G" ] && uci -q get "wireless.$SEC5G.isolate" || echo '0')
+ISOLATE=0
+if [ "$ISO_2G" = "1" ] || [ "$ISO_5G" = "1" ]; then ISOLATE=1; fi
+
+ANTI_TETH=0
+if nft list chain inet piso_shield anti_tethering >/dev/null 2>&1 || nft list table inet piso_portal 2>/dev/null | grep -q 'ip ttl set 1'; then
+  ANTI_TETH=1
+fi
+
+ENC_2G=$([ -n "$SEC2G" ] && uci -q get "wireless.$SEC2G.encryption" || echo 'none')
+ENC_5G=$([ -n "$SEC5G" ] && uci -q get "wireless.$SEC5G.encryption" || echo 'none')
+OWE_TRANS=$([ -n "$SEC2G" ] && uci -q get "wireless.$SEC2G.owe_transition_ssid" || echo '')
+OWE_MODE="off"
+if [ -n "$OWE_TRANS" ] || uci -q get wireless.wifinet_owe_2g >/dev/null 2>&1; then
+  OWE_MODE="transition"
+elif [ "$ENC_2G" = "owe" ] && [ "$ENC_5G" = "owe" ]; then
+  OWE_MODE="owe_all"
+elif [ "$ENC_5G" = "owe" ]; then
+  OWE_MODE="owe_5g"
+fi
+
+IOT_SSID=$(uci -q get wireless.piso_iot.ssid 2>/dev/null || echo '')
+CHAN_2G=$(uci -q get "wireless.$RADIO_2G.channel" 2>/dev/null || echo '6')
+
+echo "OWE_OK=$OWE_OK"
+echo "WIDS_RUN=$WIDS_RUN"
+echo "ISOLATE=$ISOLATE"
+echo "ANTI_TETH=$ANTI_TETH"
+echo "OWE_MODE=$OWE_MODE"
+echo "IOT_SSID=$IOT_SSID"
+echo "CHAN_2G=$CHAN_2G"
+    `.trim();
+
+    const res = await this.executeCommand(command);
+    if (res.code !== 0 && !res.stdout) {
+      return {
+        oweSupported: false,
+        widsRunning: false,
+        clientIsolation: false,
+        antiTethering: false,
+      };
+    }
+
+    const out = res.stdout || '';
+    const getVal = (key: string): string => {
+      const m = out.match(new RegExp(`^${key}=(.*)$`, 'm'));
+      return (m && m[1] ? m[1] : '').trim();
+    };
+
+    const modeRaw = getVal('OWE_MODE');
+    const currentOweMode: ShieldOweMode =
+      modeRaw === 'transition' || modeRaw === 'owe_5g' || modeRaw === 'owe_all' ? modeRaw : 'off';
+
+    return {
+      oweSupported: getVal('OWE_OK') === '1',
+      widsRunning: getVal('WIDS_RUN') === '1',
+      clientIsolation: getVal('ISOLATE') === '1',
+      antiTethering: getVal('ANTI_TETH') === '1',
+      iotSsid: getVal('IOT_SSID') || undefined,
+      currentOweMode,
+      channel2g: getVal('CHAN_2G') || undefined,
+    };
+  }
+
+  /**
+   * Applies OpenPiso Shield wireless, firewall, and WIDS security controls on the router.
+   */
+  public async applyShieldConfig(
+    cfg: ShieldApplyConfig
+  ): Promise<{ success: boolean; error?: string; warnings?: string[] }> {
+    const oweModeRaw = cfg.oweMode ?? cfg.shield_owe_mode;
+    const oweMode: ShieldOweMode | undefined =
+      oweModeRaw === 'off' || oweModeRaw === 'transition' || oweModeRaw === 'owe_5g' || oweModeRaw === 'owe_all'
+        ? oweModeRaw
+        : undefined;
+
+    if (oweModeRaw !== undefined && !oweMode) {
+      return { success: false, error: `Invalid shield_owe_mode: ${String(oweModeRaw)}` };
+    }
+
+    const clientIsolation = parseOptionalBoolean(cfg.clientIsolation ?? cfg.shield_client_isolation);
+    const antiTethering = parseOptionalBoolean(cfg.antiTethering ?? cfg.shield_anti_tethering);
+    const widsEnabled = parseOptionalBoolean(cfg.widsEnabled ?? cfg.shield_wids_enabled);
+
+    const rawIotSsid = cfg.iotSsid ?? cfg.shield_iot_ssid;
+    const rawIotPass = cfg.iotPassphrase ?? cfg.shield_iot_passphrase;
+
+    let cleanIotSsid: string | undefined;
+    if (rawIotSsid !== undefined) {
+      if (rawIotSsid.trim() === '') {
+        cleanIotSsid = '';
+      } else {
+        const sanitized = sanitizeSsid(rawIotSsid);
+        if (!sanitized) {
+          return { success: false, error: 'Invalid IoT SSID (must be 1-32 printable characters)' };
+        }
+        cleanIotSsid = sanitized;
+      }
+    }
+
+    let cleanIotPass: string | undefined;
+    if (rawIotPass !== undefined && rawIotPass !== '') {
+      const cleaned = rawIotPass.replace(/[\x00-\x1f\x7f]/g, '');
+      if (cleaned.length < 8 || cleaned.length > 63) {
+        return { success: false, error: 'IoT WPA2/3 passphrase must be between 8 and 63 characters' };
+      }
+      cleanIotPass = cleaned;
+    }
+
+    if (this.config.mode === 'simulation') {
+      if (oweMode !== undefined) this.simShieldState.currentOweMode = oweMode;
+      if (clientIsolation !== undefined) this.simShieldState.clientIsolation = clientIsolation;
+      if (antiTethering !== undefined) this.simShieldState.antiTethering = antiTethering;
+      if (widsEnabled !== undefined) this.simShieldState.widsRunning = widsEnabled;
+      if (cleanIotSsid !== undefined) this.simShieldState.iotSsid = cleanIotSsid;
+      console.log('[SIMULATOR] OpenPiso Shield config applied:', this.simShieldState);
+      return { success: true };
+    }
+
+    const configuredLanIf = sanitizeInterface(this.config.lanInterface);
+    const targetLanIf =
+      this.config.mode === 'local' || this.config.mode === 'local_linux'
+        ? configuredLanIf || 'eth1'
+        : configuredLanIf || 'br-lan';
+
+    const warnings: string[] = [];
+    const cmds: string[] = [];
+    let wirelessChanged = false;
+
+    // Anti-tethering works on BOTH OpenWrt and Standalone Pi Gateway
+    if (antiTethering !== undefined) {
+      if (antiTethering) {
+        cmds.push(`
+nft add table inet piso_shield 2>/dev/null || true
+nft delete chain inet piso_shield anti_tethering 2>/dev/null || true
+nft add chain inet piso_shield anti_tethering '{ type filter hook postrouting priority mangle; policy accept; }'
+nft add rule inet piso_shield anti_tethering oifname "${targetLanIf}" ip ttl set 1
+        `.trim());
+      } else {
+        cmds.push(`
+nft delete chain inet piso_shield anti_tethering 2>/dev/null || true
+nft delete chain inet piso_portal mangle_postrouting 2>/dev/null || true
+        `.trim());
+      }
+    }
+
+    if (this.config.mode === 'local' || this.config.mode === 'local_linux') {
+      if (oweMode || clientIsolation !== undefined || cleanIotSsid !== undefined || widsEnabled !== undefined) {
+        warnings.push('Wireless OWE/isolation/IoT SSID/WIDS controls apply to OpenWrt AP routers; only anti-tethering TTL=1 applies on Standalone Pi Gateway.');
+      }
+      if (cmds.length === 0) {
+        return { success: true, warnings };
+      }
+      const res = await this.executeCommand(cmds.join('\n'));
+      return { success: res.code === 0, error: res.code === 0 ? undefined : res.stderr, warnings };
+    }
+
+    cmds.push(this.getRadioDiscoveryShellHelper());
+
+    // OWE / 802.11w PMF mode
+    if (oweMode !== undefined) {
+      if (oweMode !== 'off') {
+        cmds.push(`
+OWE_OK=0
+if [ -f /lib/netifd/hostapd.sh ] && grep -q 'owe' /lib/netifd/hostapd.sh 2>/dev/null; then
+  if [ -f /usr/lib/opkg/status ]; then
+    grep -qiE '^Package: wpad-(openssl|wolfssl|mbedtls|mesh|basic-(openssl|wolfssl|mbedtls))' /usr/lib/opkg/status && OWE_OK=1
+  elif command -v apk >/dev/null 2>&1; then
+    apk info 2>/dev/null | grep -qiE '^wpad-(openssl|wolfssl|mbedtls|mesh|basic)' && OWE_OK=1
+  fi
+  if [ "$OWE_OK" -eq 0 ] && command -v wpad >/dev/null 2>&1 && grep -q 'owe_transition' /usr/sbin/wpad 2>/dev/null; then
+    OWE_OK=1
+  fi
+fi
+if [ "$OWE_OK" -eq 0 ]; then
+  echo "OWE_NOT_SUPPORTED" >&2
+  exit 2
+fi
+        `.trim());
+      }
+
+      if (oweMode === 'off') {
+        cmds.push(`
+uci -q delete wireless.wifinet_owe_2g 2>/dev/null || true
+uci -q delete wireless.wifinet_owe_5g 2>/dev/null || true
+for sec in "$SEC2G" "$SEC5G"; do
+  [ -z "$sec" ] && continue
+  uci set "wireless.$sec.encryption=none"
+  uci -q delete "wireless.$sec.ieee80211w" 2>/dev/null || true
+  uci -q delete "wireless.$sec.owe_transition_ssid" 2>/dev/null || true
+  uci -q delete "wireless.$sec.owe_transition_bssid" 2>/dev/null || true
+  uci -q delete "wireless.$sec.owe_transition_ifname" 2>/dev/null || true
+done
+        `.trim());
+      } else if (oweMode === 'owe_5g') {
+        cmds.push(`
+uci -q delete wireless.wifinet_owe_2g 2>/dev/null || true
+uci -q delete wireless.wifinet_owe_5g 2>/dev/null || true
+if [ -n "$SEC2G" ]; then
+  uci set "wireless.$SEC2G.encryption=none"
+  uci -q delete "wireless.$SEC2G.ieee80211w" 2>/dev/null || true
+  uci -q delete "wireless.$SEC2G.owe_transition_ssid" 2>/dev/null || true
+  uci -q delete "wireless.$SEC2G.owe_transition_bssid" 2>/dev/null || true
+  uci -q delete "wireless.$SEC2G.owe_transition_ifname" 2>/dev/null || true
+fi
+if [ -n "$SEC5G" ]; then
+  uci set "wireless.$SEC5G.encryption=owe"
+  uci set "wireless.$SEC5G.ieee80211w=2"
+  uci -q delete "wireless.$SEC5G.owe_transition_ssid" 2>/dev/null || true
+  uci -q delete "wireless.$SEC5G.owe_transition_bssid" 2>/dev/null || true
+  uci -q delete "wireless.$SEC5G.owe_transition_ifname" 2>/dev/null || true
+fi
+        `.trim());
+      } else if (oweMode === 'owe_all') {
+        cmds.push(`
+uci -q delete wireless.wifinet_owe_2g 2>/dev/null || true
+uci -q delete wireless.wifinet_owe_5g 2>/dev/null || true
+for sec in "$SEC2G" "$SEC5G"; do
+  [ -z "$sec" ] && continue
+  uci set "wireless.$sec.encryption=owe"
+  uci set "wireless.$sec.ieee80211w=2"
+  uci -q delete "wireless.$sec.owe_transition_ssid" 2>/dev/null || true
+  uci -q delete "wireless.$sec.owe_transition_bssid" 2>/dev/null || true
+  uci -q delete "wireless.$sec.owe_transition_ifname" 2>/dev/null || true
+done
+        `.trim());
+      } else if (oweMode === 'transition') {
+        cmds.push(`
+if grep -q 'owe_transition' /lib/netifd/hostapd.sh 2>/dev/null; then
+  if [ -n "$SEC2G" ]; then
+    S2=$(uci -q get "wireless.$SEC2G.ssid" || echo "OpenPisoWiFi")
+    uci set "wireless.$SEC2G.encryption=none"
+    uci -q delete "wireless.$SEC2G.ieee80211w" 2>/dev/null || true
+    uci set "wireless.$SEC2G.owe_transition_ssid=\${S2}_OWE"
+    uci set wireless.wifinet_owe_2g=wifi-iface
+    uci set "wireless.wifinet_owe_2g.device=$RADIO_2G"
+    uci set wireless.wifinet_owe_2g.network='lan'
+    uci set wireless.wifinet_owe_2g.mode='ap'
+    uci set "wireless.wifinet_owe_2g.ssid=\${S2}_OWE"
+    uci set wireless.wifinet_owe_2g.encryption='owe'
+    uci set wireless.wifinet_owe_2g.ieee80211w='2'
+    uci set wireless.wifinet_owe_2g.hidden='1'
+    uci set "wireless.wifinet_owe_2g.owe_transition_ssid=$S2"
+  fi
+  if [ -n "$SEC5G" ]; then
+    S5=$(uci -q get "wireless.$SEC5G.ssid" || echo "OpenPisoWiFi_5G")
+    uci set "wireless.$SEC5G.encryption=none"
+    uci -q delete "wireless.$SEC5G.ieee80211w" 2>/dev/null || true
+    uci set "wireless.$SEC5G.owe_transition_ssid=\${S5}_OWE"
+    uci set wireless.wifinet_owe_5g=wifi-iface
+    uci set "wireless.wifinet_owe_5g.device=$RADIO_5G"
+    uci set wireless.wifinet_owe_5g.network='lan'
+    uci set wireless.wifinet_owe_5g.mode='ap'
+    uci set "wireless.wifinet_owe_5g.ssid=\${S5}_OWE"
+    uci set wireless.wifinet_owe_5g.encryption='owe'
+    uci set wireless.wifinet_owe_5g.ieee80211w='2'
+    uci set wireless.wifinet_owe_5g.hidden='1'
+    uci set "wireless.wifinet_owe_5g.owe_transition_ssid=$S5"
+  fi
+else
+  # Fallback if hostapd.sh lacks owe_transition helper: secure 5GHz with OWE
+  [ -n "$SEC2G" ] && uci set "wireless.$SEC2G.encryption=none"
+  if [ -n "$SEC5G" ]; then
+    uci set "wireless.$SEC5G.encryption=owe"
+    uci set "wireless.$SEC5G.ieee80211w=2"
+  fi
+fi
+        `.trim());
+      }
+      wirelessChanged = true;
+    }
+
+    // Client Isolation (isolate='1'|'0')
+    if (clientIsolation !== undefined) {
+      const isoVal = clientIsolation ? '1' : '0';
+      cmds.push(`
+[ -n "$SEC2G" ] && uci set "wireless.$SEC2G.isolate=${isoVal}"
+[ -n "$SEC5G" ] && uci set "wireless.$SEC5G.isolate=${isoVal}"
+[ -n "$(uci -q get wireless.wifinet_owe_2g)" ] && uci set "wireless.wifinet_owe_2g.isolate=${isoVal}"
+[ -n "$(uci -q get wireless.wifinet_owe_5g)" ] && uci set "wireless.wifinet_owe_5g.isolate=${isoVal}"
+      `.trim());
+      wirelessChanged = true;
+    }
+
+    // Hidden WPA2/3-PMF IoT & Admin SSID
+    if (cleanIotSsid !== undefined) {
+      if (cleanIotSsid === '') {
+        cmds.push('uci -q delete wireless.piso_iot 2>/dev/null || true');
+        wirelessChanged = true;
+      } else {
+        const quotedIotSsid = shellSingleQuote(cleanIotSsid);
+        const preCheck = cleanIotPass
+          ? ''
+          : `if [ -z "$(uci -q get wireless.piso_iot.key)" ]; then echo "IOT_PASSPHRASE_REQUIRED" >&2; exit 3; fi\n`;
+        const setKeyCmd = cleanIotPass
+          ? `uci set wireless.piso_iot.key=${shellSingleQuote(cleanIotPass)}\n`
+          : '';
+
+        cmds.push(`
+${preCheck}IOT_ENC="psk2+ccmp"
+if [ -f /lib/netifd/hostapd.sh ] && grep -q 'sae-mixed' /lib/netifd/hostapd.sh 2>/dev/null; then
+  if [ -f /usr/lib/opkg/status ] && grep -qiE '^Package: wpad-(openssl|wolfssl|mbedtls|mesh|basic-(openssl|wolfssl|mbedtls))' /usr/lib/opkg/status; then
+    IOT_ENC="sae-mixed"
+  elif command -v apk >/dev/null 2>&1 && apk info 2>/dev/null | grep -qiE '^wpad-(openssl|wolfssl|mbedtls|mesh|basic)'; then
+    IOT_ENC="sae-mixed"
+  fi
+fi
+uci set wireless.piso_iot=wifi-iface
+${setKeyCmd}uci set "wireless.piso_iot.device=$RADIO_2G"
+uci set wireless.piso_iot.network='lan'
+uci set wireless.piso_iot.mode='ap'
+uci set wireless.piso_iot.ssid=${quotedIotSsid}
+uci set wireless.piso_iot.encryption="$IOT_ENC"
+uci set wireless.piso_iot.ieee80211w='1'
+uci set wireless.piso_iot.hidden='1'
+uci set wireless.piso_iot.isolate='0'
+uci set wireless.piso_iot.disabled='0'
+        `.trim());
+        wirelessChanged = true;
+      }
+    }
+
+    if (wirelessChanged) {
+      cmds.push('uci commit wireless');
+      cmds.push('(sleep 1 && wifi reload) >/dev/null 2>&1 &');
+    }
+
+    // OpenWrt WIDS Daemon (/etc/init.d/piso-wids)
+    if (widsEnabled !== undefined) {
+      if (widsEnabled) {
+        cmds.push(`
+if [ -x /etc/init.d/piso-wids ]; then
+  /etc/init.d/piso-wids enable 2>/dev/null || true
+  /etc/init.d/piso-wids restart 2>/dev/null || /etc/init.d/piso-wids start 2>/dev/null || true
+fi
+        `.trim());
+      } else {
+        cmds.push(`
+if [ -x /etc/init.d/piso-wids ]; then
+  /etc/init.d/piso-wids stop 2>/dev/null || true
+  /etc/init.d/piso-wids disable 2>/dev/null || true
+fi
+        `.trim());
+      }
+    }
+
+    if (cmds.length <= 1) {
+      return { success: true };
+    }
+
+    const res = await this.executeCommand(cmds.join('\n'));
+    if (res.code !== 0) {
+      if (res.stderr.includes('OWE_NOT_SUPPORTED')) {
+        return {
+          success: false,
+          error: 'OWE_NOT_SUPPORTED: Router wpad package does not support OWE/802.11w PMF. Install wpad-mbedtls or wpad-openssl first.',
+        };
+      }
+      if (res.stderr.includes('IOT_PASSPHRASE_REQUIRED')) {
+        return {
+          success: false,
+          error: 'IoT WPA2/3 passphrase (min 8 chars) is required when creating the hidden IoT SSID.',
+        };
+      }
+      return { success: false, error: res.stderr || 'Failed to apply Shield configuration on router' };
+    }
+
+    return { success: true, warnings: warnings.length > 0 ? warnings : undefined };
+  }
+
+  /**
+   * Cycles the 2.4GHz Wi-Fi radio across non-overlapping channels (1 -> 6 -> 11 -> 1)
+   * to evade interference or targeted channel deauth attacks.
+   */
+  public async hopChannel2g(): Promise<{
+    success: boolean;
+    previousChannel?: string;
+    newChannel?: string;
+    error?: string;
+  }> {
+    if (this.config.mode === 'simulation') {
+      const prev = this.simWifiState.channel2g || '6';
+      const next = prev === '1' ? '6' : prev === '6' ? '11' : '1';
+      this.simWifiState.channel2g = next;
+      this.simShieldState.channel2g = next;
+      return { success: true, previousChannel: prev, newChannel: next };
+    }
+
+    const command = `
+${this.getRadioDiscoveryShellHelper()}
+CUR=$(uci -q get "wireless.$RADIO_2G.channel" || echo "6")
+case "$CUR" in
+  1) NEXT="6" ;;
+  6) NEXT="11" ;;
+  11) NEXT="1" ;;
+  *) NEXT="11" ;;
+esac
+uci set "wireless.$RADIO_2G.channel=$NEXT"
+uci commit wireless
+(sleep 1 && wifi reload) >/dev/null 2>&1 &
+echo "HOPPED:$CUR:$NEXT"
+    `.trim();
+
+    const res = await this.executeCommand(command);
+    if (res.code !== 0) {
+      return { success: false, error: res.stderr || 'Failed to hop 2.4GHz channel' };
+    }
+
+    const match = (res.stdout || '').match(/HOPPED:([^:\s]+):([^:\s]+)/);
+    return {
+      success: true,
+      previousChannel: match?.[1],
+      newChannel: match?.[2] || '11',
+    };
   }
 }
 

@@ -1,11 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
+import {
+  isAdminRequest,
+  isInternalDaemonRequest,
+  requireAdmin,
+  maskSecret,
+  isBlankOrMaskedSecret,
+} from '@/lib/admin-auth';
+import { daemonHeaders } from '@/lib/daemon';
 
 export const dynamic = 'force-dynamic';
 
 const DAEMON_URL = process.env.DAEMON_URL || 'http://127.0.0.1:4000';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const isAdmin = await isAdminRequest(request);
+  const isDaemon = isInternalDaemonRequest(request);
+
+  if (!isAdmin && !isDaemon) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 }
+    );
+  }
+
   await ensureSqlitePragmas();
 
   try {
@@ -20,6 +38,7 @@ export async function GET() {
     let daemonOnline = false;
     try {
       const daemonRes = await fetch(`${DAEMON_URL}/api/telegram/status`, {
+        headers: daemonHeaders(),
         cache: 'no-store',
         signal: AbortSignal.timeout(1500),
       });
@@ -32,12 +51,10 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      token,
+      token: isDaemon ? token : '',
       adminChatId,
       hasToken: Boolean(token),
-      tokenMasked: token
-        ? (token.length > 10 ? `${token.slice(0, 6)}...${token.slice(-4)}` : '******')
-        : null,
+      tokenMasked: maskSecret(token),
       daemonOnline,
       isPolling: daemonStatus?.isPolling || false,
     });
@@ -50,18 +67,35 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
-    const body = await request.json();
-    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    const body = await request.json().catch(() => ({}));
+    const rawToken = typeof body.token === 'string' ? body.token.trim() : '';
     const adminChatId = typeof body.adminChatId === 'string' ? body.adminChatId.trim() : '';
 
-    await prisma.setting.upsert({
-      where: { key: 'telegram_bot_token' },
-      update: { value: token },
-      create: { key: 'telegram_bot_token', value: token },
-    });
+    let effectiveToken = '';
+    if (body.clearToken === true || body.clear_telegram_token === true) {
+      effectiveToken = '';
+      await prisma.setting.upsert({
+        where: { key: 'telegram_bot_token' },
+        update: { value: '' },
+        create: { key: 'telegram_bot_token', value: '' },
+      });
+    } else if (!isBlankOrMaskedSecret(rawToken)) {
+      effectiveToken = rawToken;
+      await prisma.setting.upsert({
+        where: { key: 'telegram_bot_token' },
+        update: { value: effectiveToken },
+        create: { key: 'telegram_bot_token', value: effectiveToken },
+      });
+    } else {
+      const existing = await prisma.setting.findUnique({ where: { key: 'telegram_bot_token' } });
+      effectiveToken = existing?.value || '';
+    }
 
     await prisma.setting.upsert({
       where: { key: 'telegram_admin_chat_id' },
@@ -74,8 +108,8 @@ export async function POST(request: NextRequest) {
     try {
       const daemonRes = await fetch(`${DAEMON_URL}/api/telegram/config`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, adminChatId }),
+        headers: daemonHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ token: effectiveToken, adminChatId }),
         signal: AbortSignal.timeout(2000),
       });
       if (daemonRes.ok) {
@@ -87,6 +121,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      hasToken: Boolean(effectiveToken),
+      tokenMasked: maskSecret(effectiveToken),
       message: 'Telegram credentials saved successfully.',
       daemonNotified,
     });

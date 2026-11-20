@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
-import { getMacFromIp, cleanIpv4 } from '@/lib/arp';
+import { getMacFromIp } from '@/lib/arp';
+import { getTrustedClientIp } from '@/lib/client-ip';
 import { authorizeClientMac, deauthorizeClientMac } from '@/lib/daemon';
 
 export const dynamic = 'force-dynamic';
@@ -8,12 +9,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   await ensureSqlitePragmas();
 
-  const rawIp =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    '127.0.0.1';
-  const ip = cleanIpv4(rawIp);
-
+  const ip = getTrustedClientIp(request);
   const macAddress = await getMacFromIp(ip);
   if (!macAddress) {
     return NextResponse.json({ error: 'Could not resolve device MAC address' }, { status: 400 });
@@ -24,6 +20,16 @@ export async function POST(request: NextRequest) {
     const { action } = body;
 
     if (action === 'pause') {
+      const allowPauseSetting = await prisma.setting.findUnique({
+        where: { key: 'allow_pause_time' },
+      });
+      if (allowPauseSetting?.value === 'false') {
+        return NextResponse.json(
+          { error: 'Pausing session time is currently disabled by the administrator.' },
+          { status: 403 }
+        );
+      }
+
       // Find active unpaused session
       const now = new Date();
       const session = await prisma.session.findFirst({
@@ -45,7 +51,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Session has less than 10 seconds remaining and cannot be paused.' }, { status: 400 });
       }
 
-      // Update session in DB
       await prisma.session.update({
         where: { id: session.id },
         data: {
@@ -54,7 +59,6 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // Deauthorize on OpenWrt
       await deauthorizeClientMac(macAddress);
 
       return NextResponse.json({
@@ -66,7 +70,6 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'resume') {
-      // Find paused session
       const pausedSession = await prisma.session.findFirst({
         where: {
           macAddress,
@@ -84,7 +87,6 @@ export async function POST(request: NextRequest) {
       const newEndTime = new Date(now.getTime() + pausedSession.pausedRemainingSeconds * 1000);
       const remainingMinutes = Math.max(1, Math.ceil(pausedSession.pausedRemainingSeconds / 60));
 
-      // Update session in DB
       await prisma.session.update({
         where: { id: pausedSession.id },
         data: {
@@ -95,7 +97,6 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // Re-authorize on OpenWrt (resuming existing time, not new sale)
       await authorizeClientMac(macAddress, remainingMinutes, ip, {
         amount: 0,
         isNewSession: false,

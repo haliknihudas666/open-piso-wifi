@@ -9,6 +9,7 @@
  */
 
 export interface CoinLockHolder {
+  slotId: string;
   ip: string;
   mac?: string;
   sessionToken?: string;
@@ -19,28 +20,31 @@ export interface CoinLockHolder {
 
 // Global reference surviving hot-reloads in Next.js development
 declare global {
-  var globalCoinLock: CoinLockHolder | null | undefined;
+  var globalCoinLocks: Map<string, CoinLockHolder> | undefined;
 }
 
-let activeLock: CoinLockHolder | null = global.globalCoinLock ?? null;
+const lockMap: Map<string, CoinLockHolder> = global.globalCoinLocks ?? new Map();
+global.globalCoinLocks = lockMap;
 
-function setLock(lock: CoinLockHolder | null) {
-  activeLock = lock;
-  global.globalCoinLock = lock;
+function normalizeSlotKey(slotId?: string | null): string {
+  const clean = typeof slotId === 'string' ? slotId.trim() : '';
+  return clean || 'main';
 }
 
 /**
- * Returns current lock if active and unexpired.
+ * Returns current lock if active and unexpired for a given slotId (default 'main').
  * Automatically clears expired locks.
  */
-export function getActiveLock(): CoinLockHolder | null {
-  if (!activeLock) return null;
+export function getActiveLock(slotId?: string | null): CoinLockHolder | null {
+  const key = normalizeSlotKey(slotId);
+  const lock = lockMap.get(key) ?? null;
+  if (!lock) return null;
 
-  if (Date.now() > activeLock.expiresAt) {
-    setLock(null);
+  if (Date.now() > lock.expiresAt) {
+    lockMap.delete(key);
     return null;
   }
-  return activeLock;
+  return lock;
 }
 
 /**
@@ -49,9 +53,10 @@ export function getActiveLock(): CoinLockHolder | null {
 export function isClientLockHolder(
   clientIp: string,
   clientMac?: string | null,
-  clientSessionToken?: string | null
+  clientSessionToken?: string | null,
+  slotId?: string | null
 ): boolean {
-  const lock = getActiveLock();
+  const lock = getActiveLock(slotId);
   if (!lock) return false;
 
   if (clientIp && lock.ip === clientIp) return true;
@@ -70,14 +75,16 @@ export function acquireCoinLock(
   clientIp: string,
   clientMac?: string | null,
   clientSessionToken?: string | null,
-  timeoutSeconds: number = 60
+  timeoutSeconds: number = 60,
+  slotId?: string | null
 ): { success: boolean; error?: string; remainingSeconds?: number } {
+  const key = normalizeSlotKey(slotId);
   const now = Date.now();
-  const currentLock = getActiveLock();
+  const currentLock = getActiveLock(key);
 
   if (currentLock) {
     // If the same client already holds the lock, refresh expiration and merge identifiers
-    if (isClientLockHolder(clientIp, clientMac, clientSessionToken)) {
+    if (isClientLockHolder(clientIp, clientMac, clientSessionToken, key)) {
       currentLock.expiresAt = now + timeoutSeconds * 1000;
       if (clientMac && !currentLock.mac) currentLock.mac = clientMac;
       if (clientSessionToken && !currentLock.sessionToken) currentLock.sessionToken = clientSessionToken;
@@ -94,7 +101,8 @@ export function acquireCoinLock(
   }
 
   // Acquire new lock
-  setLock({
+  lockMap.set(key, {
+    slotId: key,
     ip: clientIp,
     mac: clientMac || undefined,
     sessionToken: clientSessionToken || undefined,
@@ -109,8 +117,12 @@ export function acquireCoinLock(
 /**
  * Refreshes lock expiration whenever new coin pulses are detected from hardware.
  */
-export function refreshCoinLockOnPulse(currentPulses: number, timeoutSeconds: number = 60): void {
-  const lock = getActiveLock();
+export function refreshCoinLockOnPulse(
+  currentPulses: number,
+  timeoutSeconds: number = 60,
+  slotId?: string | null
+): void {
+  const lock = getActiveLock(slotId);
   if (!lock) return;
 
   if (currentPulses > lock.lastPulses) {
@@ -126,13 +138,15 @@ export function releaseCoinLock(
   clientIp?: string,
   clientMac?: string | null,
   clientSessionToken?: string | null,
-  force: boolean = false
+  force: boolean = false,
+  slotId?: string | null
 ): boolean {
-  const lock = getActiveLock();
+  const key = normalizeSlotKey(slotId);
+  const lock = getActiveLock(key);
   if (!lock) return true;
 
-  if (force || isClientLockHolder(clientIp || '', clientMac, clientSessionToken)) {
-    setLock(null);
+  if (force || isClientLockHolder(clientIp || '', clientMac, clientSessionToken, key)) {
+    lockMap.delete(key);
     return true;
   }
 

@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { requireAdmin } from '@/lib/admin-auth';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   try {
     const rootDir = path.resolve(process.cwd(), '..');
     const deployScript = path.join(rootDir, 'scripts', 'deploy-router.sh');
@@ -19,7 +23,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const { stdout, stderr } = await execAsync(`bash ${deployScript}`, {
+    const { stdout, stderr } = await execFileAsync('bash', [deployScript], {
       cwd: rootDir,
       timeout: 30000,
     });

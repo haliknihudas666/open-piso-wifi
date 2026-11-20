@@ -34,10 +34,19 @@ if [ -f /etc/init.d/piso-qos ]; then
     echo "  ✓ piso-qos service removed."
 fi
 
+if [ -f /etc/init.d/piso-wids ]; then
+    /etc/init.d/piso-wids stop 2>/dev/null || true
+    /etc/init.d/piso-wids disable 2>/dev/null || true
+    rm -f /etc/init.d/piso-wids
+    echo "  ✓ piso-wids service removed."
+fi
+rm -f /usr/sbin/piso-wids.sh /etc/piso-wids.conf /tmp/piso-wids.seen /tmp/piso-wids.eviltwin 2>/dev/null || true
+
 # 2. Delete nftables table and custom ruleset
 echo "--> [2/6] Deleting nftables captive portal tables..."
 if command -v nft >/dev/null 2>&1; then
     nft delete table inet piso_portal 2>/dev/null || true
+    nft delete table inet piso_shield 2>/dev/null || true
     echo "  ✓ inet piso_portal nftables table deleted."
 fi
 

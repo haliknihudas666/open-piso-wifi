@@ -2,11 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
 import { authorizeClientMac, deauthorizeClientMac, getRouterDhcpLeases, setDaemonWhitelist, setDaemonBlacklist } from '@/lib/daemon';
 import { normalizeMac } from '@/lib/arp';
+import { requireAdmin } from '@/lib/admin-auth';
+import { generateSecureTransferCode } from '@/lib/secure-codes';
 import crypto from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -60,6 +65,9 @@ export async function GET() {
 
 // Disconnect, Add Time, or Whitelist a Session / Device
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -139,11 +147,7 @@ export async function POST(request: NextRequest) {
       } else if (targetMac) {
         // Create new session grant for connected client
         const newEndTime = new Date(Date.now() + minutesToAdd * 60 * 1000);
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        let transferCode = 'PW-';
-        for (let i = 0; i < 6; i++) {
-          transferCode += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
+        const transferCode = generateSecureTransferCode();
 
         const newSession = await prisma.session.create({
           data: {

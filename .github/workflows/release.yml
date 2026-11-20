@@ -77,6 +77,7 @@ jobs:
           name: OpenPisoWiFi ${{ steps.vars.outputs.TAG }}
           files: |
             dist/piso-wifi-release.tar.gz
+            dist/piso-wifi-release.tar.gz.sha256
             dist/version.json
           generate_release_notes: true
           make_latest: true

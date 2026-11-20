@@ -14,6 +14,12 @@ PORTAL_DOMAIN="${PORTAL_DOMAIN:-wifi.local}"
 SSID_2G="${SSID_2G:-OpenPisoWifi}"
 SSID_5G="${SSID_5G:-}"
 UNIFIED_SSID="${UNIFIED_SSID:-}"
+OWE_MODE="${OWE_MODE:-owe_5g}"
+ISOLATE="${ISOLATE:-1}"
+ANTI_TETHERING="${ANTI_TETHERING:-}"
+IOT_SSID="${IOT_SSID:-}"
+IOT_PASS="${IOT_PASS:-}"
+SHIELD_SECRET="${SHIELD_SECRET:-}"
 
 # Determine execution mode and parse parameters
 MODE="fresh"
@@ -49,8 +55,36 @@ for arg in "$@"; do
         --ssid-5g=*)
             SSID_5G="${arg#*=}"
             ;;
+        --owe-mode=*)
+            OWE_MODE="${arg#*=}"
+            ;;
+        --isolate=*)
+            ISOLATE="${arg#*=}"
+            ;;
+        --anti-tethering=*)
+            ANTI_TETHERING="${arg#*=}"
+            ;;
+        --iot-ssid=*)
+            IOT_SSID="${arg#*=}"
+            ;;
+        --iot-pass=*)
+            IOT_PASS="${arg#*=}"
+            ;;
+        --shield-secret=*)
+            SHIELD_SECRET="${arg#*=}"
+            ;;
     esac
 done
+
+case "$OWE_MODE" in
+    off|transition|owe_5g|owe_all) ;;
+    *) OWE_MODE="owe_5g" ;;
+esac
+
+case "$ISOLATE" in
+    0|false|no) ISOLATE="0" ;;
+    *) ISOLATE="1" ;;
+esac
 
 # Resolve SSID naming:
 # If --unified is set, broadcast identical SSID on 2.4G & 5G (band steering).
@@ -84,6 +118,26 @@ if [ -z "$RPI_IP" ]; then
     fi
 fi
 
+# Preserve existing WIDS secret / anti-tethering state when not explicitly passed on CLI
+if [ -f /etc/piso-wids.conf ]; then
+    OLD_WIDS_SECRET=$(grep -E '^SHIELD_SECRET=' /etc/piso-wids.conf 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '"'\''')
+    OLD_ANTI_TETHER=$(grep -E '^ANTI_TETHERING=' /etc/piso-wids.conf 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '"'\''')
+    [ -z "$SHIELD_SECRET" ] && [ -n "$OLD_WIDS_SECRET" ] && SHIELD_SECRET="$OLD_WIDS_SECRET"
+    [ -z "$ANTI_TETHERING" ] && [ -n "$OLD_ANTI_TETHER" ] && ANTI_TETHERING="$OLD_ANTI_TETHER"
+fi
+if [ -z "$ANTI_TETHERING" ]; then
+    if nft list chain inet piso_portal mangle_postrouting 2>/dev/null | grep -q 'ip ttl set 1'; then
+        ANTI_TETHERING="1"
+    else
+        ANTI_TETHERING="0"
+    fi
+fi
+case "$ANTI_TETHERING" in
+    1|true|yes) ANTI_TETHERING="1" ;;
+    *) ANTI_TETHERING="0" ;;
+esac
+SHIELD_SECRET=$(printf '%s' "$SHIELD_SECRET" | tr -d '\r\n"'\''$`\\')
+
 echo "=========================================================="
 if [ "$MODE" = "update" ]; then
     echo "🔄 Starting OpenPisoWifi Smart OpenWrt Update (Preserving State)..."
@@ -91,11 +145,12 @@ else
     echo "⚡ Starting OpenPisoWifi OpenWrt First-Time Setup..."
 fi
 echo "=========================================================="
-echo "• Mode: ${MODE}"
-echo "• Router Gateway IP: ${ROUTER_IP}"
-echo "• Paywall IP: ${RPI_IP}:${PORTAL_PORT}"
-echo "• Local Portal Domain: http://${PORTAL_DOMAIN}"
-echo "• Direct Mobile Shortcut: http://10.0.0.1"
+echo "• Mode:             ${MODE}"
+echo "• Router Gateway:   ${ROUTER_IP}"
+echo "• Paywall Host:     ${RPI_IP}:80 (Daemon Reverse Proxy)"
+echo "• Local Domain:     http://${PORTAL_DOMAIN}"
+echo "• Mobile Shortcut:  http://10.0.0.1"
+echo "• Shield Policy:    OWE=${OWE_MODE} | Isolate=${ISOLATE} | AntiTether=${ANTI_TETHERING}"
 
 BACKUP_DIR="/tmp/piso_router_backup"
 
@@ -125,15 +180,15 @@ fi
 # ------------------------------------------------------------------------------
 # STEP 1: INSTALL REQUIRED PACKAGES (Supports opkg & apk)
 # ------------------------------------------------------------------------------
-echo "--> Checking and installing OpenWrt packages (tc, iwinfo, schedulers, speedtestcpp)..."
+echo "--> Checking and installing OpenWrt packages (tc, iwinfo, schedulers, speedtestcpp, conntrack)..."
 if command -v apk >/dev/null 2>&1; then
     apk update 2>/dev/null || true
-    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp; do
+    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp conntrack; do
         apk add "$pkg" 2>/dev/null || true
     done
 elif command -v opkg >/dev/null 2>&1; then
     opkg update 2>/dev/null || true
-    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp; do
+    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp conntrack; do
         opkg install "$pkg" 2>/dev/null || true
     done
 fi
@@ -169,13 +224,14 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# STEP 3: CONFIGURE DHCP, CAPTIVE PORTAL RFC 8908/7710 & LOCAL DNS DOMAIN
+# STEP 3: CONFIGURE DHCP, CAPTIVE PORTAL & LOCAL DNS DOMAIN
 # ------------------------------------------------------------------------------
 echo "--> Configuring DHCP Pool, dnsmasq & Local Domain (${PORTAL_DOMAIN} -> ${RPI_IP})..."
 uci set dhcp.lan.start="10"
 uci set dhcp.lan.limit="220"
-uci set dhcp.lan.leasetime="24h"
+uci set dhcp.lan.leasetime="2h"
 uci set dhcp.@dnsmasq[0].dhcpleasemax='4096'
+uci set dhcp.@dnsmasq[0].authoritative='1'
 # Clear DHCP options 114/160 so mobile devices use standard HTTP probe detection
 # (option 114 expects RFC 8908 JSON API, causing CNA failures when HTML is served)
 uci -q delete dhcp.lan.dhcp_option
@@ -269,11 +325,29 @@ for q in /sys/class/net/*/queues/rx-*; do
 done
 
 # ------------------------------------------------------------------------------
-# STEP 4: WI-FI CONFIGURATION
+# STEP 4: WI-FI CONFIGURATION (OWE / 802.11w PMF / Isolation / Optional IoT SSID)
 # ------------------------------------------------------------------------------
 if [ "$MODE" = "fresh" ]; then
-    echo "--> [Fresh Mode] Configuring Dual-Band Wi-Fi SSIDs..."
+    echo "--> [Fresh Mode] Configuring Dual-Band Wi-Fi SSIDs & Anti-Deauth Shield..."
     [ -f /etc/config/wireless ] || wifi config
+
+    # Detect whether hostapd/wpad supports OWE before applying so older wpad-basic builds never lose Wi-Fi
+    OWE_SUPPORTED=0
+    if grep -q "owe_transition_ssid" /usr/sbin/hostapd /usr/sbin/wpad 2>/dev/null || \
+       grep -q "owe_groups" /usr/sbin/hostapd /usr/sbin/wpad 2>/dev/null; then
+        OWE_SUPPORTED=1
+    elif command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -Eq '^wpad-(openssl|wolfssl|mbedtls|full|mesh)'; then
+        OWE_SUPPORTED=1
+    elif command -v apk >/dev/null 2>&1 && apk info 2>/dev/null | grep -Eq '^wpad-(openssl|wolfssl|mbedtls|full|mesh)'; then
+        OWE_SUPPORTED=1
+    fi
+
+    EFFECTIVE_OWE="$OWE_MODE"
+    if [ "$OWE_SUPPORTED" -eq 0 ] && [ "$OWE_MODE" != "off" ]; then
+        echo "  ⚠️ Warning: hostapd/wpad does not advertise OWE support (likely wpad-basic)."
+        echo "     Falling back to encryption='none' so Wi-Fi stays online. Install wpad-mbedtls/openssl for OWE+PMF."
+        EFFECTIVE_OWE="off"
+    fi
 
     # Configure physical radio0 (2.4GHz)
     if uci -q get wireless.radio0 >/dev/null; then
@@ -298,28 +372,133 @@ if [ "$MODE" = "fresh" ]; then
     # Reset wifi interfaces only on fresh install
     while uci -q delete wireless.@wifi-iface[0]; do :; done
 
-    # 2.4GHz SSID
+    ENC_2G="none"
+    PMF_2G=""
+    ENC_5G="none"
+    PMF_5G=""
+
+    case "$EFFECTIVE_OWE" in
+        owe_all)
+            ENC_2G="owe"
+            PMF_2G="2"
+            ENC_5G="owe"
+            PMF_5G="2"
+            ;;
+        owe_5g)
+            ENC_2G="none"
+            ENC_5G="owe"
+            PMF_5G="2"
+            ;;
+        transition)
+            if grep -q "owe_transition_ifname" /lib/netifd/hostapd.sh 2>/dev/null; then
+                ENC_2G="none"
+                ENC_5G="none"
+            else
+                echo "  ⚠️ OWE transition helper unavailable in hostapd.sh; applying OWE+PMF on 5GHz."
+                ENC_2G="none"
+                ENC_5G="owe"
+                PMF_5G="2"
+            fi
+            ;;
+        off)
+            ENC_2G="none"
+            ENC_5G="none"
+            ;;
+    esac
+
+    # 2.4GHz Primary Guest SSID (wifinet0)
     if uci -q get wireless.radio0 >/dev/null; then
         uci set wireless.wifinet0=wifi-iface
         uci set wireless.wifinet0.device='radio0'
         uci set wireless.wifinet0.network='lan'
         uci set wireless.wifinet0.mode='ap'
         uci set wireless.wifinet0.ssid="${SSID_2G}"
-        uci set wireless.wifinet0.encryption='none'
+        uci set wireless.wifinet0.encryption="${ENC_2G}"
+        [ -n "$PMF_2G" ] && uci set wireless.wifinet0.ieee80211w="${PMF_2G}"
         uci set wireless.wifinet0.disabled='0'
-        uci set wireless.wifinet0.isolate='0'
+        uci set wireless.wifinet0.isolate="${ISOLATE}"
+        if [ "$EFFECTIVE_OWE" = "transition" ] && grep -q "owe_transition_ifname" /lib/netifd/hostapd.sh 2>/dev/null; then
+            uci set wireless.wifinet0.ifname='piso2g'
+            uci set wireless.wifinet0.owe_transition_ifname='piso2g-owe'
+        fi
     fi
 
-    # 5GHz SSID
+    # 5GHz Primary Guest SSID (wifinet1)
     if uci -q get wireless.radio1 >/dev/null; then
         uci set wireless.wifinet1=wifi-iface
         uci set wireless.wifinet1.device='radio1'
         uci set wireless.wifinet1.network='lan'
         uci set wireless.wifinet1.mode='ap'
         uci set wireless.wifinet1.ssid="${SSID_5G}"
-        uci set wireless.wifinet1.encryption='none'
+        uci set wireless.wifinet1.encryption="${ENC_5G}"
+        [ -n "$PMF_5G" ] && uci set wireless.wifinet1.ieee80211w="${PMF_5G}"
         uci set wireless.wifinet1.disabled='0'
-        uci set wireless.wifinet1.isolate='0'
+        uci set wireless.wifinet1.isolate="${ISOLATE}"
+        if [ "$EFFECTIVE_OWE" = "transition" ] && grep -q "owe_transition_ifname" /lib/netifd/hostapd.sh 2>/dev/null; then
+            uci set wireless.wifinet1.ifname='piso5g'
+            uci set wireless.wifinet1.owe_transition_ifname='piso5g-owe'
+        fi
+    fi
+
+    # OWE Transition hidden companion VAPs (created after wifinet0/wifinet1 to preserve indices)
+    if [ "$EFFECTIVE_OWE" = "transition" ] && grep -q "owe_transition_ifname" /lib/netifd/hostapd.sh 2>/dev/null; then
+        if uci -q get wireless.radio0 >/dev/null; then
+            uci set wireless.wifinet0_owe=wifi-iface
+            uci set wireless.wifinet0_owe.device='radio0'
+            uci set wireless.wifinet0_owe.network='lan'
+            uci set wireless.wifinet0_owe.mode='ap'
+            uci set wireless.wifinet0_owe.ifname='piso2g-owe'
+            uci set wireless.wifinet0_owe.ssid="${SSID_2G}-OWE"
+            uci set wireless.wifinet0_owe.encryption='owe'
+            uci set wireless.wifinet0_owe.ieee80211w='2'
+            uci set wireless.wifinet0_owe.hidden='1'
+            uci set wireless.wifinet0_owe.disabled='0'
+            uci set wireless.wifinet0_owe.isolate="${ISOLATE}"
+            uci set wireless.wifinet0_owe.owe_transition_ifname='piso2g'
+        fi
+        if uci -q get wireless.radio1 >/dev/null; then
+            uci set wireless.wifinet1_owe=wifi-iface
+            uci set wireless.wifinet1_owe.device='radio1'
+            uci set wireless.wifinet1_owe.network='lan'
+            uci set wireless.wifinet1_owe.mode='ap'
+            uci set wireless.wifinet1_owe.ifname='piso5g-owe'
+            uci set wireless.wifinet1_owe.ssid="${SSID_5G}-OWE"
+            uci set wireless.wifinet1_owe.encryption='owe'
+            uci set wireless.wifinet1_owe.ieee80211w='2'
+            uci set wireless.wifinet1_owe.hidden='1'
+            uci set wireless.wifinet1_owe.disabled='0'
+            uci set wireless.wifinet1_owe.isolate="${ISOLATE}"
+            uci set wireless.wifinet1_owe.owe_transition_ifname='piso5g'
+        fi
+    fi
+
+    # Optional Hidden WPA2/WPA3-PMF IoT & Admin SSID (e.g., ESP32 satellites & admin laptop)
+    if [ -n "$IOT_SSID" ] && [ -n "$IOT_PASS" ]; then
+        PASS_LEN=$(printf '%s' "$IOT_PASS" | wc -c | tr -dc '0-9')
+        if [ "$PASS_LEN" -ge 8 ] 2>/dev/null; then
+            IOT_RADIO=""
+            if uci -q get wireless.radio0 >/dev/null; then
+                IOT_RADIO="radio0"
+            elif uci -q get wireless.radio1 >/dev/null; then
+                IOT_RADIO="radio1"
+            fi
+            if [ -n "$IOT_RADIO" ]; then
+                uci set wireless.wifinet_iot=wifi-iface
+                uci set wireless.wifinet_iot.device="${IOT_RADIO}"
+                uci set wireless.wifinet_iot.network='lan'
+                uci set wireless.wifinet_iot.mode='ap'
+                uci set wireless.wifinet_iot.ssid="${IOT_SSID}"
+                uci set wireless.wifinet_iot.key="${IOT_PASS}"
+                uci set wireless.wifinet_iot.encryption='sae-mixed'
+                uci set wireless.wifinet_iot.ieee80211w='2'
+                uci set wireless.wifinet_iot.hidden='1'
+                uci set wireless.wifinet_iot.isolate='0'
+                uci set wireless.wifinet_iot.disabled='0'
+                echo "  ✓ Hidden WPA2/3-PMF IoT/Admin SSID configured (${IOT_SSID} on ${IOT_RADIO})."
+            fi
+        else
+            echo "  ⚠️ Skipping --iot-ssid: passphrase must be at least 8 characters."
+        fi
     fi
 
     for entry in $(uci show wireless 2>/dev/null | grep -E '\.disabled=' | cut -d'.' -f2 | cut -d'=' -f1 | sort -u); do
@@ -331,15 +510,15 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# STEP 5: CONFIGURE DEDICATED CAPTIVE FIREWALL TABLE (piso_portal)
+# STEP 5: CONFIGURE DEDICATED HARDENED CAPTIVE FIREWALL TABLE (piso_portal)
 # ------------------------------------------------------------------------------
-echo "--> Deploying updated nftables Captive Portal Ruleset..."
+echo "--> Deploying hardened nftables Captive Portal Ruleset (inet piso_portal)..."
 
 rm -f /etc/nftables.d/*piso* /etc/nftables.d/10-pisowifi.nft 2>/dev/null || true
 
 # Build non-duplicate exempt IP set and conditional 10.0.0.1 shortcut rules.
 # When RPi itself is 10.0.0.1 on a 10.0.0.0/24 LAN, clients reach 10.0.0.1 directly at Layer 2
-# (no DNAT or alias needed). Otherwise, DNAT 10.0.0.1:80 to RPi's instant port-80 302 redirector
+# (no DNAT or alias needed). Otherwise, DNAT 10.0.0.1:80 to RPi's port-80 daemon proxy
 # and reject 10.0.0.1:443 with TCP RST / ICMP unreachable so HTTPS-First browsers fall back to HTTP.
 if [ "${RPI_IP}" = "10.0.0.1" ] || [ "${ROUTER_IP}" = "10.0.0.1" ]; then
     EXEMPT_IPS="${ROUTER_IP}, ${RPI_IP}"
@@ -348,16 +527,25 @@ else
 fi
 
 if [ "${RPI_IP}" != "10.0.0.1" ]; then
-    SHORTCUT_PREROUTING="        # Intercept HTTP requests directly addressed to 10.0.0.1 shortcut
-        # Port 80 hits RPi's instant HTTP 302 redirector; portal port forwards directly to Next.js
-        ip daddr 10.0.0.1 tcp dport 80 dnat ip to ${RPI_IP}:80
-        ip daddr 10.0.0.1 tcp dport ${PORTAL_PORT} dnat ip to ${RPI_IP}:${PORTAL_PORT}"
+    SHORTCUT_PREROUTING="        # Intercept HTTP requests directly addressed to 10.0.0.1 shortcut -> RPi :80 daemon proxy (NOT :${PORTAL_PORT})
+        ip daddr 10.0.0.1 tcp dport 80 dnat ip to ${RPI_IP}:80"
     SHORTCUT_INPUT="        # Fast-reject HTTPS/QUIC to 10.0.0.1 so modern HTTPS-First browsers immediately fall back to HTTP
         ip daddr 10.0.0.1 tcp dport 443 reject with tcp reset
         ip daddr 10.0.0.1 udp dport 443 reject"
 else
     SHORTCUT_PREROUTING="        # RPi owns 10.0.0.1 directly on LAN — no 10.0.0.1 DNAT needed"
     SHORTCUT_INPUT="        # RPi owns 10.0.0.1 directly on LAN — no 10.0.0.1 input reject needed"
+fi
+
+if [ "$ANTI_TETHERING" = "1" ]; then
+    ANTI_TETHER_CHAIN="
+    # Anti-Tethering Postrouting: Clamp downstream LAN IP TTL=1 to prevent unauthorized hotspot sharing
+    chain mangle_postrouting {
+        type filter hook postrouting priority mangle; policy accept;
+        oifname \"br-lan\" ip ttl set 1
+    }"
+else
+    ANTI_TETHER_CHAIN=""
 fi
 
 cat << EOF > /etc/nftables.piso.nft
@@ -382,7 +570,7 @@ table inet piso_portal {
         type ether_addr
     }
 
-    # NAT Prerouting: Intercept port 80 HTTP requests from unauthorized & banned devices
+    # NAT Prerouting: Intercept port 80 HTTP & unauthorized DNS from unauthenticated devices
     chain prerouting {
         type nat hook prerouting priority -150; policy accept;
 
@@ -397,15 +585,18 @@ ${SHORTCUT_PREROUTING}
         # Authorized MACs bypass redirect
         ether saddr @piso_auth accept
 
-        # Allow Router Gateway management (HTTP LuCI, HTTPS & SSH) for administration
+        # Allow Router Gateway management ports (restricted to RPi/VIP in input chain)
         ip daddr ${ROUTER_IP} tcp dport { 22, 80, 443 } accept
 
-        # Redirect unauthenticated and blacklisted client HTTP (port 80) to Raspberry Pi Portal :${PORTAL_PORT}
-        # Intercept external port 80 HTTP requests across all interfaces/SSIDs (br-lan, phy0-ap0, phy1-ap0, wlan0, wlan1)
-        ip daddr != { ${EXEMPT_IPS} } tcp dport 80 dnat ip to ${RPI_IP}:${PORTAL_PORT}
+        # Force unauthorized client DNS queries to local dnsmasq (blocks external DNS tunneling)
+        ip daddr != ${ROUTER_IP} udp dport 53 dnat ip to ${ROUTER_IP}:53
+        ip daddr != ${ROUTER_IP} tcp dport 53 dnat ip to ${ROUTER_IP}:53
 
-        # Allow Raspberry Pi other services (SSH, 3000, 4000)
-        ip daddr ${RPI_IP} accept
+        # Redirect unauthenticated and blacklisted client HTTP (port 80) to RPi :80 daemon proxy
+        ip daddr != { ${EXEMPT_IPS} } tcp dport 80 dnat ip to ${RPI_IP}:80
+
+        # Allow client HTTP traffic addressed to RPi port 80 (daemon reverse proxy)
+        ip daddr ${RPI_IP} tcp dport 80 accept
 
         # Allow Router Gateway other services
         ip daddr ${ROUTER_IP} accept
@@ -415,68 +606,65 @@ ${SHORTCUT_PREROUTING}
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
 
-        # Masquerade only DNAT-redirected traffic to RPi so RPi replies back via OpenWrt
-        ct status dnat ip daddr ${RPI_IP} tcp dport { 80, ${PORTAL_PORT} } masquerade
-    }
+        # Masquerade DNAT-redirected port 80 traffic to RPi so RPi replies back via OpenWrt
+        ct status dnat ip daddr ${RPI_IP} tcp dport 80 masquerade
+    }${ANTI_TETHER_CHAIN}
 
-    # Filter Input: Allow DHCP/DNS, prevent blacklisted devices from accessing router management
+    # Filter Input: Rate-limit DNS, restrict router management (:22, :80, :443) to RPi or @piso_whitelist
     chain input {
         type filter hook input priority -5; policy accept;
 
+        iifname "lo" accept
+
+        # Allow Raspberry Pi full management/DNS access to router
+        iifname "br-lan" ip saddr ${RPI_IP} accept
+
         # Allow DHCP
-        udp dport 67-68 accept
+        iifname "br-lan" udp dport 67-68 accept
 
-        # Allow ICMP ping to router & 10.0.0.1
-        icmp type echo-request accept
+        # Allow rate-limited ICMP echo
+        iifname "br-lan" icmp type echo-request limit rate 10/second burst 20 packets accept
+        iifname "br-lan" icmp type echo-request drop
 
-        # Allow DNS queries (port 53) so captive portal detection domains resolve for all clients
-        udp dport 53 accept
-        tcp dport 53 accept
+        # Rate-limit DNS queries to local dnsmasq (20/s burst 40)
+        iifname "br-lan" udp dport 53 limit rate 20/second burst 40 packets accept
+        iifname "br-lan" udp dport 53 drop
+        iifname "br-lan" tcp dport 53 limit rate 20/second burst 40 packets accept
+        iifname "br-lan" tcp dport 53 drop
 
 ${SHORTCUT_INPUT}
 
-        # Drop blacklisted devices from accessing router management services (SSH/HTTP/HTTPS)
-        ip daddr ${ROUTER_IP} ether saddr @piso_blacklist tcp dport { 22, 80, 443 } drop
+        # Restrict router management (:22, :80, :443) strictly to RPi or VIP Whitelist (drop all guests)
+        iifname "br-lan" ether saddr @piso_whitelist tcp dport { 22, 80, 443 } accept
+        iifname "br-lan" tcp dport { 22, 80, 443 } drop
     }
 
-    # Filter Forward: Block all internet access for unauthorized & blacklisted devices
+    # Filter Forward: Enforce blacklist, block DNS tunneling & unauthorized RPi ports, require MAC auth
     chain forward {
         type filter hook forward priority -5; policy accept;
 
-        # Allow established / return traffic
-        ct state established,related accept
-
-        # Allow Raspberry Pi (${RPI_IP}) full access to WAN/Internet
-        ip saddr ${RPI_IP} accept
-        ip daddr ${RPI_IP} accept
-
-        # Allow all LAN clients (including banned) to reach Raspberry Pi Paywall Portal
-        ip daddr ${RPI_IP} accept
-
-        # Allow traffic within the local LAN (${ROUTER_NET_BASE}.0/24)
-        ip saddr ${ROUTER_NET_BASE}.0/24 ip daddr ${ROUTER_NET_BASE}.0/24 accept
-
-        # Allow DNS queries (port 53)
-        udp dport 53 accept
-        tcp dport 53 accept
-
-        # Allow DHCP
-        udp dport 67-68 accept
-
-        # Drop blacklisted devices completely from ANY external internet / WAN forwarding
+        # 1. Drop blacklisted devices FIRST (before ct state established,related!)
         ether saddr @piso_blacklist drop
 
-        # Allow VIP Whitelisted MACs full internet access
-        ether saddr @piso_whitelist accept
+        # 2. Allow RPi outbound & controlled inbound access (:80 for all, :4000 for @piso_whitelist only)
+        ip saddr ${RPI_IP} accept
+        ip daddr ${RPI_IP} tcp dport 80 accept
+        ip daddr ${RPI_IP} tcp dport 4000 ether saddr @piso_whitelist accept
+        ip daddr ${RPI_IP} tcp dport { 22, 3000, 4000 } drop
+        ip daddr ${RPI_IP} ct state established,related accept
 
-        # Allow authorized client MACs to access the internet
+        # 3. Allow WAN return traffic only (LAN outbound must re-match @piso_whitelist or @piso_auth)
+        iifname != "br-lan" ct state established,related accept
+
+        # 4. Allow DHCP
+        udp dport 67-68 accept
+
+        # 5. Allow VIP Whitelisted and Authenticated client MACs
+        ether saddr @piso_whitelist accept
         ether saddr @piso_auth accept
 
-        # FAST REJECT: Immediately reject unauthorized TCP connection attempts (e.g. HTTPS port 443)
-        # with TCP RST across all interfaces/SSIDs so phone browsers fail fast
+        # 6. Fast TCP RST for unauthorized connections, then drop everything else (incl. external port 53)
         meta l4proto tcp reject with tcp reset
-
-        # BLOCK ALL OTHER INTERNET ACCESS FOR UNAUTHORIZED CLIENTS ACROSS ALL INTERFACES & SSIDS!
         drop
     }
 }
@@ -487,7 +675,7 @@ nft delete table inet piso_portal 2>/dev/null || true
 nft -f /etc/nftables.piso.nft
 
 # ------------------------------------------------------------------------------
-# STEP 6: RESTORE ACTIVE TABLES & MAC WHITELIST/BLACKLIST
+# STEP 6: RESTORE ACTIVE TABLES, INSTALL SERVICES & HARDEN DROPBEAR
 # ------------------------------------------------------------------------------
 echo "--> Restoring MAC tables (Whitelist, Blacklist, and active sessions)..."
 
@@ -569,7 +757,7 @@ EOF
 chmod +x /etc/init.d/piso-firewall
 /etc/init.d/piso-firewall enable
 
-# Create/update OpenWrt init service for QoS
+# Create/update OpenWrt init service for QoS (CAKE dual-dsthost/dual-srchost NAT)
 cat << 'EOF' > /etc/init.d/piso-qos
 #!/bin/sh /etc/rc.common
 START=98
@@ -579,16 +767,18 @@ start() {
     if [ -f /etc/config/piso_qos ]; then
         DOWN=$(uci -q get piso_qos.settings.download_mbps || echo 0)
         UP=$(uci -q get piso_qos.settings.upload_mbps || echo 0)
-        WAN_IF=$(uci -q get piso_qos.settings.wan_if || uci -q get network.wan.device || uci -q get network.wan.ifname || echo "wan")
+        WAN_IF=$(uci -q get piso_qos.settings.wan_if || uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5}' || echo "wan")
 
-        if [ "$DOWN" -gt 0 ]; then
+        if [ -n "$DOWN" ] && [ "$DOWN" -gt 0 ] 2>/dev/null; then
             tc qdisc del dev br-lan root 2>/dev/null || true
+            tc qdisc add dev br-lan root cake bandwidth ${DOWN}mbit besteffort dual-dsthost nat 2>/dev/null || \
             tc qdisc add dev br-lan root cake bandwidth ${DOWN}mbit 2>/dev/null || \
             tc qdisc add dev br-lan root handle 1: tbf rate ${DOWN}mbit burst 64kb latency 50ms 2>/dev/null || true
         fi
 
-        if [ "$UP" -gt 0 ] && [ -n "$WAN_IF" ]; then
+        if [ -n "$UP" ] && [ "$UP" -gt 0 ] 2>/dev/null && [ -n "$WAN_IF" ]; then
             tc qdisc del dev "$WAN_IF" root 2>/dev/null || true
+            tc qdisc add dev "$WAN_IF" root cake bandwidth ${UP}mbit besteffort dual-srchost nat 2>/dev/null || \
             tc qdisc add dev "$WAN_IF" root cake bandwidth ${UP}mbit 2>/dev/null || \
             tc qdisc add dev "$WAN_IF" root handle 1: tbf rate ${UP}mbit burst 64kb latency 50ms 2>/dev/null || true
         fi
@@ -596,7 +786,7 @@ start() {
 }
 
 stop() {
-    WAN_IF=$(uci -q get piso_qos.settings.wan_if || uci -q get network.wan.device || uci -q get network.wan.ifname || echo "wan")
+    WAN_IF=$(uci -q get piso_qos.settings.wan_if || uci -q get network.wan.device || uci -q get network.wan.ifname || ip route show default 2>/dev/null | awk '{print $5}' || echo "wan")
     tc qdisc del dev br-lan root 2>/dev/null || true
     [ -n "$WAN_IF" ] && tc qdisc del dev "$WAN_IF" root 2>/dev/null || true
 }
@@ -609,15 +799,319 @@ EOF
 chmod +x /etc/init.d/piso-qos
 /etc/init.d/piso-qos enable
 
-# Configure Dropbear SSH
-uci set dropbear.@dropbear[0].Port='22'
-uci set dropbear.@dropbear[0].PasswordAuth='on'
-uci set dropbear.@dropbear[0].RootPasswordAuth='on'
-uci commit dropbear
+# Install OpenPisoWiFi Wireless Intrusion Detection System (piso-wids)
+echo "--> Installing OpenPisoWiFi WIDS (/usr/sbin/piso-wids.sh & /etc/init.d/piso-wids)..."
+cat << EOF > /etc/piso-wids.conf
+RPI_IP="${RPI_IP}"
+DAEMON_PORT="4000"
+SHIELD_SECRET="${SHIELD_SECRET}"
+ANTI_TETHERING="${ANTI_TETHERING}"
+SCAN_INTERVAL="45"
+DEAUTH_COOLDOWN="30"
+EVIL_TWIN_COOLDOWN="60"
+EOF
+chmod 600 /etc/piso-wids.conf
+
+cat << 'EOF' > /usr/sbin/piso-wids.sh
+#!/bin/sh
+# ==============================================================================
+# OpenPisoWiFi - OpenWrt Wireless Intrusion Detection System (piso-wids)
+# ==============================================================================
+
+CONF_FILE="/etc/piso-wids.conf"
+SEEN_FILE="/tmp/piso-wids.seen"
+ET_CACHE_FILE="/tmp/piso-wids.eviltwin"
+
+RPI_IP="192.168.1.240"
+DAEMON_PORT="4000"
+SHIELD_SECRET=""
+SCAN_INTERVAL="45"
+DEAUTH_COOLDOWN="30"
+EVIL_TWIN_COOLDOWN="60"
+
+if [ -f "$CONF_FILE" ]; then
+    . "$CONF_FILE"
+fi
+
+[ -z "$SCAN_INTERVAL" ] && SCAN_INTERVAL=45
+[ -z "$DEAUTH_COOLDOWN" ] && DEAUTH_COOLDOWN=30
+[ -z "$EVIL_TWIN_COOLDOWN" ] && EVIL_TWIN_COOLDOWN=60
+[ -z "$DAEMON_PORT" ] && DAEMON_PORT=4000
+
+json_escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+post_wids_event() {
+    payload="$1"
+    url="http://${RPI_IP}:${DAEMON_PORT}/api/shield/wids-event"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -sS -m 3 -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Shield-Secret: ${SHIELD_SECRET}" \
+            -d "$payload" \
+            "$url" >/dev/null 2>&1 && return 0
+    fi
+
+    if command -v nc >/dev/null 2>&1; then
+        len=$(printf '%s' "$payload" | wc -c | tr -dc '0-9')
+        printf 'POST /api/shield/wids-event HTTP/1.0\r\nHost: %s:%s\r\nContent-Type: application/json\r\nX-Shield-Secret: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+            "$RPI_IP" "$DAEMON_PORT" "$SHIELD_SECRET" "$len" "$payload" | nc -w 3 "$RPI_IP" "$DAEMON_PORT" >/dev/null 2>&1 || true
+    fi
+}
+
+get_ap_ifaces() {
+    if command -v iw >/dev/null 2>&1; then
+        iw dev 2>/dev/null | awk '
+            $1 == "Interface" { iface = $2 }
+            $1 == "type" && $2 == "AP" && iface != "" { print iface; iface = "" }
+        '
+    fi
+}
+
+get_iface_band() {
+    iface="$1"
+    chan=$(iw dev "$iface" info 2>/dev/null | awk '/channel / {print $2; exit}')
+    if [ -n "$chan" ] && [ "$chan" -ge 36 ] 2>/dev/null; then
+        echo "5GHz"
+    elif [ -n "$chan" ]; then
+        echo "2.4GHz"
+    elif echo "$iface" | grep -Eq 'phy1|radio1|wlan1|5g'; then
+        echo "5GHz"
+    else
+        echo "2.4GHz"
+    fi
+}
+
+count_stations_total() {
+    total=0
+    for iface in $(get_ap_ifaces); do
+        c=0
+        if command -v iw >/dev/null 2>&1; then
+            c=$(iw dev "$iface" station dump 2>/dev/null | grep -c '^Station ' || true)
+        elif command -v iwinfo >/dev/null 2>&1; then
+            c=$(iwinfo "$iface" assoclist 2>/dev/null | grep -c 'dBm' || true)
+        fi
+        c=$(printf '%s' "$c" | tr -dc '0-9')
+        [ -z "$c" ] && c=0
+        total=$((total + c))
+    done
+    echo "$total"
+}
+
+read_deauth_logs() {
+    if command -v logread >/dev/null 2>&1; then
+        logread -l 60 2>/dev/null | grep -v 'piso-wids' | grep -iE 'deauth|disassoc' | tail -n 50 || true
+    fi
+}
+
+scan_evil_twins() {
+    now="$1"
+    our_bssids=""
+    our_ssids=""
+    scan_2g=""
+    scan_5g=""
+
+    for iface in $(get_ap_ifaces); do
+        info=$(iw dev "$iface" info 2>/dev/null || true)
+        bssid=$(printf '%s\n' "$info" | awk '/addr / {print tolower($2); exit}')
+        ssid=$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*ssid //p' | head -n 1)
+        [ -n "$bssid" ] && our_bssids="${our_bssids} ${bssid} "
+        if [ -n "$ssid" ]; then
+            case "
+$our_ssids
+" in
+                *"
+$ssid
+"*) ;;
+                *) our_ssids="${our_ssids}${ssid}
+" ;;
+            esac
+        fi
+
+        band=$(get_iface_band "$iface")
+        if [ "$band" = "5GHz" ] && [ -z "$scan_5g" ]; then
+            scan_5g="$iface"
+        elif [ "$band" = "2.4GHz" ] && [ -z "$scan_2g" ]; then
+            scan_2g="$iface"
+        fi
+    done
+
+    [ -z "$our_ssids" ] && return 0
+
+    for scan_iface in $scan_2g $scan_5g; do
+        [ -z "$scan_iface" ] && continue
+        band=$(get_iface_band "$scan_iface")
+        scan_out=$(iw dev "$scan_iface" scan ap-force 2>/dev/null || true)
+        if [ -z "$scan_out" ] && command -v iwinfo >/dev/null 2>&1; then
+            scan_out=$(iwinfo "$scan_iface" scan 2>/dev/null || true)
+        fi
+        [ -z "$scan_out" ] && continue
+
+        parsed=$(printf '%s\n' "$scan_out" | awk '
+            /^BSS / {
+                if (bssid != "" && ssid != "") print tolower(bssid) "|" ssid
+                bssid = $2
+                sub(/\(.*$/, "", bssid)
+                ssid = ""
+                next
+            }
+            /Cell [0-9]+ - Address:/ {
+                if (bssid != "" && ssid != "") print tolower(bssid) "|" ssid
+                bssid = $NF
+                ssid = ""
+                next
+            }
+            /^[[:space:]]*SSID:/ {
+                sub(/^[[:space:]]*SSID:[[:space:]]*/, "", $0)
+                ssid = $0
+                next
+            }
+            /^[[:space:]]*ESSID:/ {
+                sub(/^[[:space:]]*ESSID:[[:space:]]*"/, "", $0)
+                sub(/"[[:space:]]*$/, "", $0)
+                ssid = $0
+                next
+            }
+            END {
+                if (bssid != "" && ssid != "") print tolower(bssid) "|" ssid
+            }
+        ')
+
+        printf '%s\n' "$parsed" | while IFS='|' read -r found_bssid found_ssid; do
+            [ -z "$found_bssid" ] || [ -z "$found_ssid" ] && continue
+            printf '%s' "$our_ssids" | grep -Fxq -- "$found_ssid" || continue
+
+            case "$our_bssids" in
+                *" ${found_bssid} "*)
+                    continue
+                    ;;
+            esac
+
+            last_et=0
+            if [ -f "$ET_CACHE_FILE" ]; then
+                last_et=$(awk -F'|' -v b="$found_bssid" '$1 == b {print $2; exit}' "$ET_CACHE_FILE" 2>/dev/null || echo 0)
+            fi
+            [ -z "$last_et" ] && last_et=0
+            if [ $((now - last_et)) -lt "$EVIL_TWIN_COOLDOWN" ]; then
+                continue
+            fi
+
+            if [ -f "$ET_CACHE_FILE" ]; then
+                awk -F'|' -v b="$found_bssid" '$1 != b {print $0}' "$ET_CACHE_FILE" > "${ET_CACHE_FILE}.tmp" 2>/dev/null || true
+                mv -f "${ET_CACHE_FILE}.tmp" "$ET_CACHE_FILE" 2>/dev/null || true
+            fi
+            printf '%s|%s\n' "$found_bssid" "$now" >> "$ET_CACHE_FILE"
+
+            esc_ssid=$(json_escape "$found_ssid")
+            esc_bssid=$(json_escape "$found_bssid")
+            esc_band=$(json_escape "$band")
+            msg="Evil Twin AP detected on ${esc_band}: foreign BSSID ${esc_bssid} broadcasting SSID '${esc_ssid}'"
+            logger -t piso-wids -p daemon.warn "$msg" 2>/dev/null || true
+
+            payload=$(printf '{"type":"evil_twin","severity":"high","band":"%s","ssid":"%s","bssid":"%s","message":"%s"}' \
+                "$esc_band" "$esc_ssid" "$esc_bssid" "$(json_escape "$msg")")
+            post_wids_event "$payload"
+        done
+    done
+}
+
+read_deauth_logs > "$SEEN_FILE"
+rm -f "$ET_CACHE_FILE"
+
+S1_T=0; S1_C=0
+S2_T=0; S2_C=0
+S3_T=0; S3_C=0
+D0=0; D1=0; D2=0
+LAST_DEAUTH_ALERT=0
+LAST_SCAN_TIME=0
+
+logger -t piso-wids "OpenPisoWiFi WIDS started (target=${RPI_IP}:${DAEMON_PORT}, scan_interval=${SCAN_INTERVAL}s)" 2>/dev/null || true
+
+while true; do
+    NOW=$(date +%s)
+
+    CURR_COUNT=$(count_stations_total)
+    MAX_RECENT="$CURR_COUNT"
+    if [ $((NOW - S1_T)) -le 6 ] && [ "$S1_C" -gt "$MAX_RECENT" ]; then MAX_RECENT="$S1_C"; fi
+    if [ $((NOW - S2_T)) -le 6 ] && [ "$S2_C" -gt "$MAX_RECENT" ]; then MAX_RECENT="$S2_C"; fi
+    if [ $((NOW - S3_T)) -le 6 ] && [ "$S3_C" -gt "$MAX_RECENT" ]; then MAX_RECENT="$S3_C"; fi
+    STATION_DROP=$((MAX_RECENT - CURR_COUNT))
+
+    S3_T="$S2_T"; S3_C="$S2_C"
+    S2_T="$S1_T"; S2_C="$S1_C"
+    S1_T="$NOW";  S1_C="$CURR_COUNT"
+
+    CURR_LOGS=$(read_deauth_logs)
+    NEW_DEAUTH=$(printf '%s\n' "$CURR_LOGS" | awk '
+        NR==FNR { if ($0 != "") seen[$0]++; next }
+        { if ($0 != "") { if (seen[$0] > 0) seen[$0]--; else cnt++ } }
+        END { print cnt + 0 }
+    ' "$SEEN_FILE" -)
+    printf '%s\n' "$CURR_LOGS" > "$SEEN_FILE"
+    [ -z "$NEW_DEAUTH" ] && NEW_DEAUTH=0
+
+    D2="$D1"
+    D1="$D0"
+    D0="$NEW_DEAUTH"
+    DEAUTH_5S=$((D0 + D1 + D2))
+
+    if [ "$STATION_DROP" -ge 3 ] || [ "$DEAUTH_5S" -ge 5 ]; then
+        if [ $((NOW - LAST_DEAUTH_ALERT)) -ge "$DEAUTH_COOLDOWN" ]; then
+            LAST_DEAUTH_ALERT="$NOW"
+            EVENT_COUNT="$DEAUTH_5S"
+            [ "$STATION_DROP" -gt "$EVENT_COUNT" ] && EVENT_COUNT="$STATION_DROP"
+            MSG="Deauth storm detected (${STATION_DROP} station drop(s), ${DEAUTH_5S} deauth/disassoc events in 5s)"
+            logger -t piso-wids -p daemon.warn "$MSG" 2>/dev/null || true
+            PAYLOAD=$(printf '{"type":"deauth_storm","severity":"high","band":"2.4GHz/5GHz","count":%s,"message":"%s"}' \
+                "$EVENT_COUNT" "$(json_escape "$MSG")")
+            post_wids_event "$PAYLOAD"
+        fi
+    fi
+
+    if [ $((NOW - LAST_SCAN_TIME)) -ge "$SCAN_INTERVAL" ]; then
+        LAST_SCAN_TIME="$NOW"
+        scan_evil_twins "$NOW"
+    fi
+
+    sleep 2
+done
+EOF
+chmod +x /usr/sbin/piso-wids.sh
+
+cat << 'EOF' > /etc/init.d/piso-wids
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/sbin/piso-wids.sh
+    procd_set_param respawn 3600 5 5
+    procd_set_param file /etc/piso-wids.conf
+    procd_close_instance
+}
+EOF
+chmod +x /etc/init.d/piso-wids
+/etc/init.d/piso-wids enable
+
+# Configure & Harden Dropbear SSH
 mkdir -p /etc/dropbear
 touch /etc/dropbear/authorized_keys
 chmod 700 /etc/dropbear
 chmod 600 /etc/dropbear/authorized_keys
+uci set dropbear.@dropbear[0].Port='22'
+if [ -s /etc/dropbear/authorized_keys ]; then
+    uci set dropbear.@dropbear[0].PasswordAuth='off'
+    uci set dropbear.@dropbear[0].RootPasswordAuth='off'
+    echo "  ✓ Dropbear SSH hardened: key-only auth enabled (password auth disabled)."
+else
+    uci set dropbear.@dropbear[0].PasswordAuth='on'
+    uci set dropbear.@dropbear[0].RootPasswordAuth='on'
+    echo "  • Dropbear password auth temporarily active (authorized_keys empty)."
+fi
+uci commit dropbear
 
 # ------------------------------------------------------------------------------
 # STEP 7: RESTART RELEVANT SERVICES
@@ -629,6 +1123,7 @@ if [ "$MODE" = "update" ]; then
     /etc/init.d/firewall reload 2>/dev/null || /etc/init.d/firewall restart 2>/dev/null || true
     /etc/init.d/piso-firewall restart 2>/dev/null || true
     /etc/init.d/piso-qos restart 2>/dev/null || true
+    /etc/init.d/piso-wids restart 2>/dev/null || true
     /etc/init.d/dropbear restart 2>/dev/null || true
     echo "  ✓ Firewall reloaded seamlessly without bouncing Wi-Fi radios."
 else
@@ -640,6 +1135,7 @@ else
     /etc/init.d/firewall restart 2>/dev/null || true
     /etc/init.d/piso-firewall restart 2>/dev/null || true
     /etc/init.d/piso-qos restart 2>/dev/null || true
+    /etc/init.d/piso-wids restart 2>/dev/null || true
     /etc/init.d/dropbear restart 2>/dev/null || true
 fi
 
@@ -653,7 +1149,7 @@ else
     echo "• 5GHz Wi-Fi SSID: ${SSID_5G}"
 fi
 echo "• Router Gateway IP: http://${ROUTER_IP}"
-echo "• Paywall Address: http://${RPI_IP}:${PORTAL_PORT}"
+echo "• Paywall Address: http://${RPI_IP} (Daemon Proxy :80 -> :${PORTAL_PORT})"
 echo "• Portal Local Domain: http://${PORTAL_DOMAIN}"
 echo "• Customer Mobile Shortcut: http://10.0.0.1"
 echo "=========================================================="

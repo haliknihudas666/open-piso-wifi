@@ -2,7 +2,8 @@
 # ==============================================================================
 # 🔑 OpenPisoWifi - Setup Sudoers Permissions for 1-Click Updates & Services
 # ==============================================================================
-# Grants passwordless sudo for service restarts, iptables redirect, and reboot.
+# Grants least-privilege passwordless sudo for fixed service restarts, reboot,
+# and OTA update invocation (no wildcard commands).
 # ==============================================================================
 
 set -e
@@ -29,8 +30,8 @@ echo ""
 sudo mkdir -p /etc/sudoers.d
 
 sudo tee /etc/sudoers.d/openpisowifi > /dev/null << EOF
-# OpenPisoWifi passwordless sudo permissions for background service management & OTA updates
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/systemd-run, /usr/bin/systemd-run, /sbin/iptables, /usr/sbin/iptables, /bin/chown, /usr/bin/chown, /bin/chmod, /usr/bin/chmod, /bin/true, /usr/bin/true, /bin/sed, /usr/bin/sed, /sbin/reboot, /usr/sbin/reboot, /bin/reboot, /usr/bin/reboot, ${ROOT_DIR}/scripts/update.sh, /bin/bash ${ROOT_DIR}/scripts/update.sh, /usr/bin/bash ${ROOT_DIR}/scripts/update.sh
+# OpenPisoWifi least-privilege passwordless sudo permissions for service management & OTA updates
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart pisowifi-portal.service, /usr/bin/systemctl restart pisowifi-portal.service, /bin/systemctl restart pisowifi-daemon.service, /usr/bin/systemctl restart pisowifi-daemon.service, /bin/systemctl daemon-reload, /usr/bin/systemctl daemon-reload, /sbin/reboot, /usr/sbin/reboot, ${ROOT_DIR}/scripts/update.sh, /bin/bash ${ROOT_DIR}/scripts/update.sh, /usr/bin/bash ${ROOT_DIR}/scripts/update.sh
 EOF
 
 sudo chmod 0440 /etc/sudoers.d/openpisowifi
@@ -38,7 +39,7 @@ sudo chmod 0440 /etc/sudoers.d/openpisowifi
 echo -e "${GREEN}✅ Sudoers configuration created successfully!${NC}"
 echo ""
 echo -e "• Permissions verified:"
-sudo -l -U "${CURRENT_USER}" | grep -E "systemctl|iptables|reboot|update.sh" || true
+sudo -l -U "${CURRENT_USER}" | grep -E "systemctl|reboot|update.sh" || true
 
 echo ""
 echo -e "${CYAN}==============================================================${NC}"

@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isClientAuthenticated } from '@/lib/auth-check';
-import { setDaemonWhitelist, authorizeClientMac, deauthorizeClientMac } from '@/lib/daemon';
+import { setDaemonWhitelist, authorizeClientMac } from '@/lib/daemon';
 import { getPortalRedirectUrl } from '@/lib/portal-url';
+import { getTrustedClientIp } from '@/lib/client-ip';
 
 /**
  * Windows NCSI (Network Connectivity Status Indicator) Probe Handler
  * Windows queries /ncsi.txt and expects text "Microsoft NCSI".
  */
 export async function GET(request: NextRequest) {
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    '127.0.0.1';
+  const ip = getTrustedClientIp(request);
 
   const portalUrl = await getPortalRedirectUrl(request.headers.get('host'));
   const { isAuthenticated, isVip, macAddress, remainingSeconds, deviceName, notes } = await isClientAuthenticated(ip);

@@ -55,7 +55,7 @@ By utilizing native Linux `nftables` sets with kernel-level expiry timeouts, int
 - **📡 Dual-Band Wi-Fi & Radio Management**:
   - Configure 2.4GHz & 5GHz SSIDs, channels, and security directly from the web interface.
   - Zero-drop background reload (`(sleep 1 && wifi reload) &`) ensures the admin web session does not drop while applying changes.
-- **⚡ Traffic Control QoS Bandwidth Limiter**: Apply global download and upload speed limits using OpenWrt traffic control (`tc-tiny` / `tbf` on `br-lan`).
+- **⚡ Traffic Control QoS Bandwidth Limiter**: Apply global download and upload speed limits using OpenWrt traffic control (`cake` with `dual-dsthost`/`dual-srchost` NAT fairness, or `tc-tiny`/`tbf`).
 - **🎫 Batch Voucher Generator & Print Studio**: Bulk-generate voucher codes with custom durations and expiry days, and open ready-to-print layouts formatted for 58mm/80mm thermal receipt printers or standard A4 sheets.
 - **🩺 System Health & Telemetry**: Live CPU temperature, RAM usage, storage space, OpenWrt CPU load, uptime, and Dropbear SSH status.
 - **⚡ Remote Power Controls**: One-click remote reboot of the OpenWrt router or Raspberry Pi, and manual flush of firewall authorization tables.
@@ -63,20 +63,34 @@ By utilizing native Linux `nftables` sets with kernel-level expiry timeouts, int
 
 ---
 
+## 🛡️ OpenPiso Shield & Security Hardening
+
+OpenPisoWiFi includes **OpenPiso Shield**, an integrated wireless, network, and hardware defense suite controllable from `/admin`:
+
+- **Anti-Deauth Protection (OWE & 802.11w PMF)**: Secures 5GHz (`owe_5g` default), Transition (`transition`), or dual-band (`owe_all`) guest Wi-Fi with Opportunistic Wireless Encryption and mandatory Management Frame Protection (`ieee80211w=2`), auto-detecting `hostapd`/`wpad` support so older `wpad-basic` builds never lose Wi-Fi.
+- **OpenWrt WIDS (`piso-wids`)**: Background router sensor monitoring associated stations and `hostapd`/kernel logs for deauth storms (`>=3` station drops or `>=5` deauth events in 5s) plus periodic `iw` scans for Evil Twin APs, posting signed alerts (`X-Shield-Secret`) to the daemon.
+- **Storm Shield Auto-Pause Protection**: Automatically freezes auto-pause disconnects and extends active customer timers forward during a detected deauth storm so paying users never lose time.
+- **Hidden IoT / Admin SSID**: Optional hidden `sae-mixed` (`ieee80211w=2`) SSID for ESP32 wireless satellites and admin devices.
+- **Firewall & Network Lockdown (`inet piso_portal`)**: AP client isolation (`isolate=1`), DNS tunneling prevention (eliminates port 53 forwarding and redirects unauthorized DNS to local `dnsmasq` with 20 req/s rate limiting), optional anti-tethering (`ip ttl set 1`), blocked guest access to router LuCI/SSH (`:22/:80/:443`) and daemon ports, and Dropbear key-only SSH hardening when `authorized_keys` is populated.
+- **Portal, Auth & Supply-Chain Hardening**: Daemon Port 80 reverse proxy (`port80Server`) signs trusted client IPs (`x-proxy-auth` HMAC-SHA256) while Next.js binds strictly to `127.0.0.1:3000`; admin access uses `scrypt`-hashed PINs, HttpOnly `piso_admin_session` cookies, and login rate limiting; `sudoers` is restricted to fixed exact commands; OTA updates verify `piso-wifi-release.tar.gz.sha256` before extraction.
+- **Hardware & ESP32 Defense**: Coinslots boot physically inhibited (`LOCKED`), validate pulse LOW widths (`12ms–400ms`) against ESD/stuck-LOW tampering, run hardware task watchdogs (`esp_task_wdt`), sign satellite traffic with HMAC-SHA256 (`<mbedtls/md.h>`), and buffer coins in NVS flash (`pending_pulses`) across Wi-Fi drops.
+
+---
+
 ## 🌐 Network Architecture & Addressing Scheme
 
 The architecture leaves the OpenWrt router address untouched while providing seamless mobile customer access:
 
-- **Router Gateway (Untouched)**: OpenWrt remains at its standard default **`192.168.1.1`** (preserving native LuCI Web UI on ports 80 and 443).
-- **Raspberry Pi Portal**: Hosted at static IP **`192.168.1.240`**.
+- **Router Gateway (Untouched)**: OpenWrt remains at its standard default **`192.168.1.1`** (restricted to Raspberry Pi & VIP Whitelist for management).
+- **Raspberry Pi Portal**: Hosted at static IP **`192.168.1.240`** on **Port 80** via the Daemon HMAC reverse proxy (`127.0.0.1:3000` upstream).
 - **Friendly Domain**: Accessible via **`http://wifi.local/`** (resolved via OpenWrt `dnsmasq`).
 - **Direct Mobile Shortcut**: Accessible via **`http://10.0.0.1/`** (alias `10.0.0.1/32` bound to `br-lan` and redirected to the portal).
 
 | Device | Role | IP Address | Description |
 | :--- | :--- | :--- | :--- |
-| **Ruijie RG-EW1200G Pro** | OpenWrt Gateway & AP | **`192.168.1.1`** (Untouched) | Dual-band AP (2.4GHz & 5GHz), DHCP server, dedicated `nftables` captive firewall & dnsmasq domain host |
-| **Raspberry Pi** | Paywall & Hardware Daemon | **`192.168.1.240`** | Next.js 16 Web Portal (:3000), Hardware Daemon (:4000), Smart Coin Slot & Inhibit Control (Default: PIN 3 / BCM 2 Coin, PIN 5 / BCM 3 Inhibit) |
-| **Wi-Fi Clients** | Smartphones / Laptops | `192.168.1.10 - 192.168.1.230` | Dynamic DHCP clients connecting to open Wi-Fi SSIDs |
+| **Ruijie RG-EW1200G Pro** | OpenWrt Gateway & AP | **`192.168.1.1`** (Untouched) | Dual-band AP (2.4GHz & 5GHz OWE/PMF), DHCP server, hardened `nftables` captive firewall, `piso-wids`, & `dnsmasq` |
+| **Raspberry Pi** | Paywall & Hardware Daemon | **`192.168.1.240`** | Daemon Port 80 Proxy & Control API (:4000), localhost Next.js Portal (`127.0.0.1:3000`), Smart Coin Slot & Inhibit Control (Default: PIN 7 / BCM 4 Coin, PIN 11 / BCM 17 Inhibit) |
+| **Wi-Fi Clients** | Smartphones / Laptops | `192.168.1.10 - 192.168.1.230` | Dynamic DHCP clients (`2h` lease) with AP isolation enabled |
 
 ---
 
@@ -91,8 +105,8 @@ graph TD
         AP5G["📶 5GHz Wi-Fi: OpenPisoWiFi_5G"]
         FW["🛡️ OpenWrt Firewall: table inet piso_portal<br/>sets: piso_auth, piso_whitelist, piso_blacklist"]
         DHCP["🏷️ dnsmasq DHCP Pool: 192.168.1.10 - 230"]
-        Redirect["🔀 Port 80 HTTP Redirect to 192.168.1.240:3000"]
-        QOS["⚡ Traffic Control QoS: tc-tiny Speed Limiter"]
+        Redirect["🔀 Port 80 HTTP Redirect to 192.168.1.240:80"]
+        QOS["⚡ Traffic Control QoS: CAKE Speed Limiter"]
     end
     
     Clients["📱 Mobile Phones / Laptops"] -->|"Connect to Open Wi-Fi"| AP24
@@ -102,13 +116,13 @@ graph TD
     
     subgraph RaspberryPi ["Raspberry Pi Paywall: 192.168.1.240"]
         CoinSlot["🪙 Multi-Coin Acceptor: CL168 / Allan"]
-        Daemon["⚡ Hardware Daemon :4000"]
-        Portal["🌐 Next.js 16 Web Portal :3000"]
+        Daemon["⚡ Hardware Daemon :4000 & Port 80 Proxy"]
+        Portal["🌐 Next.js 16 Web Portal (127.0.0.1:3000)"]
         DB[("SQLite DB with WAL Mode")]
-        Admin["💻 Admin Dashboard :3000/admin"]
+        Admin["💻 Admin Dashboard (/admin)"]
         
-        CoinSlot -->|"Pulse Line: PIN 3 / BCM 2"| Daemon
-        Daemon -->|"Inhibit Line: PIN 5 / BCM 3 HIGH=Block, LOW=Accept"| CoinSlot
+        CoinSlot -->|"Pulse Line: PIN 7 / BCM 4"| Daemon
+        Daemon -->|"Inhibit Line: PIN 11 / BCM 17 HIGH=Block, LOW=Accept"| CoinSlot
         Portal -->|"Polls Coins / Auth API / Inhibit"| Daemon
         DB --> Portal
         Daemon -->|"SSH Dropbear Commands"| FW
@@ -141,13 +155,13 @@ Multi-coin acceptors (e.g. **CL168**, **Allan 1239A**, **HX-616**) operate on **
   |     🪙 Multi-Coin Acceptor (CL168)  |
   |  • 12V DC Power (+)                 | <--- 12V 2A Power Supply (+)
   |  • Ground / DC Power (-)            | <--- 12V Supply GND & RPi GND (Pin 6/9/14/20)
-  |  • Inhibit / Block Line             | <--- Raspberry Pi Pin 5 (BCM 3 / Inhibit)
+  |  • Inhibit / Block Line             | <--- Raspberry Pi Pin 11 (BCM 17 / Inhibit)
   |  • Coin Signal Pulse Line           |
   +------------------+------------------+
                      │
                      │   [ 10kΩ Resistor in series ]
-                     └───/\/\/\/\───────┬───────────────────> Raspberry Pi Physical Pin 3
-                                        │                     (BCM GPIO 2 / SDA1)
+                     └───/\/\/\/\───────┬───────────────────> Raspberry Pi Physical Pin 7
+                                        │                     (BCM GPIO 4)
                                  [ 4.7kΩ Resistor ]*
                                         │  *(Optional divider if coin line outputs 12V)
   +-------------------------------------┴-------------------+
@@ -158,12 +172,13 @@ Multi-coin acceptors (e.g. **CL168**, **Allan 1239A**, **HX-616**) operate on **
 ### Pin Mapping Reference:
 | Function | Raspberry Pi Physical Pin | BCM Number (Software) | WiringPi Number | Description / Logic |
 | :--- | :--- | :--- | :--- | :--- |
-| **COIN Input** | **Pin 3** | **BCM 2** (SDA1) | GPIO 8 | Falling-edge pulse train (300ms window) |
-| **INHIBIT Output**| **Pin 5** | **BCM 3** (SCL1) | GPIO 9 | `HIGH` = Slot Blocked, `LOW` = Slot Accepts Coins |
+| **COIN Input** | **Pin 7** | **BCM 4** | GPIO 7 | Falling-edge pulse train (12–400ms width validated) |
+| **INHIBIT Output**| **Pin 11** | **BCM 17** | GPIO 0 | `HIGH` = Slot Blocked, `LOW` = Slot Accepts Coins |
+| **BUTTON Input** (Optional) | **Pin 13** | **BCM 27** | GPIO 2 | Physical "Insert Coin" push button (to GND) |
 | **Ground (GND)** | **Pin 6 / 9 / 14 / 20 / 39**| GND | GND | Common ground reference with 12V PSU |
 
 > [!NOTE]
-> Pins are fully configurable in the **Admin Settings** (`/admin`) using the **Interactive 40-Pin GPIO Selector**, without needing to edit code or reboot.
+> Physical Pins **3 & 5** (BCM 2 / 3) have permanent **1.8kΩ I2C pull-up resistors** on Raspberry Pi boards and are reserved for I2C displays; OpenPisoWiFi defaults to **Physical Pin 7 (BCM 4)** and **Physical Pin 11 (BCM 17)** to avoid electrical false-triggering. Pins remain configurable in **Admin Settings** (`/admin`).
 
 ### Physical Cabling:
 1. **WAN Port (Ruijie Router)**: Connect Ethernet cable to your ISP modem / Fiber ONU.
@@ -242,10 +257,10 @@ Updates are atomic and **state-preserving**. Upgrades finish in **~3–5 seconds
 - **Zero Wi-Fi Downtime**: Router updates do not bounce Wi-Fi transmitters, keeping connected users online seamlessly.
 
 ### Method A: 1-Click Update from Admin Web Portal (Recommended)
-1. Navigate to: `http://192.168.1.240:3000/admin` (or `http://wifi.local/admin`, Default PIN: `1234`).
+1. Navigate to: `http://192.168.1.240/admin` (or `http://wifi.local/admin`, Default PIN: `1234`).
 2. Scroll to the **System & OTA Releases** card.
 3. If an update is available on GitHub, click **Update to vX.X.X**.
-4. Monitor the live terminal logs as the update downloads, restores database state, and restarts services.
+4. Monitor the live terminal logs as the update verifies SHA-256 checksums, restores database state, and restarts services.
 
 ### Method B: Terminal CLI Update
 On the Raspberry Pi:
@@ -372,10 +387,10 @@ npm run dev
 | :--- | :--- | :--- | :--- |
 | **Local Portal Domain** | `http://wifi.local/` | User-friendly domain for connected Wi-Fi clients | None |
 | **Direct Mobile Shortcut** | `http://10.0.0.1/` | Fast 8-character shortcut (intercepted & forwarded) | None |
-| **Direct Web Portal** | `http://192.168.1.240:3000/` | Direct IP & port access | None |
-| **Admin Dashboard** | `http://wifi.local/admin`<br>`http://10.0.0.1/admin`<br>`http://192.168.1.240:3000/admin` | Revenue analytics, router config, vouchers, client manager | **PIN: `1234`** |
-| **Hardware Daemon API** | `http://127.0.0.1:4000/` | Internal REST API for hardware & OpenWrt controls | Internal |
-| **OpenWrt LuCI Web Admin** | `http://192.168.1.1/` | Native OpenWrt router administration | User: `root` |
+| **Direct Web Portal** | `http://192.168.1.240/` | Served via Daemon Port 80 proxy (`127.0.0.1:3000` upstream) | None |
+| **Admin Dashboard** | `http://wifi.local/admin`<br>`http://10.0.0.1/admin`<br>`http://192.168.1.240/admin` | Revenue analytics, Shield security, router config, vouchers | **PIN: `1234`** |
+| **Hardware Daemon API** | `http://127.0.0.1:4000/` | Loopback-only REST API (`X-Daemon-Secret` required) | Internal |
+| **OpenWrt LuCI Web Admin** | `http://192.168.1.1/` | Native OpenWrt router administration (RPi / VIP Whitelist only) | User: `root` |
 
 ---
 
@@ -471,28 +486,34 @@ ssh root@192.168.1.1 "iwinfo wlan0 assoclist; iwinfo wlan1 assoclist"
 ssh root@192.168.1.1 "tc -s qdisc show dev br-lan"
 ```
 
-### Coin & Hardware Testing via CLI:
+### Coin & Hardware Testing via CLI (Loopback + `DAEMON_API_SECRET`):
 ```bash
+# Load your daemon secret first from daemon/.env
+SECRET=$(grep '^DAEMON_API_SECRET=' daemon/.env | cut -d'=' -f2-)
+
 # Unlock coin slot (Inhibit LOW - accepts coins)
 curl -X POST http://127.0.0.1:4000/api/inhibit \
      -H "Content-Type: application/json" \
+     -H "X-Daemon-Secret: $SECRET" \
      -d '{"enabled": true}'
 
 # Lock coin slot (Inhibit HIGH - blocks coins)
 curl -X POST http://127.0.0.1:4000/api/inhibit \
      -H "Content-Type: application/json" \
+     -H "X-Daemon-Secret: $SECRET" \
      -d '{"enabled": false}'
 
-# Simulate inserting a ₱5 coin (5 pulses)
+# Simulate inserting a ₱5 coin (5 pulses, dev/simulator mode)
 curl -X POST http://127.0.0.1:4000/api/coins/simulate \
      -H "Content-Type: application/json" \
+     -H "X-Daemon-Secret: $SECRET" \
      -d '{"pulses": 5}'
 
 # Check pending coin pulses & slot state
-curl http://127.0.0.1:4000/api/coins
+curl -H "X-Daemon-Secret: $SECRET" http://127.0.0.1:4000/api/coins
 
 # View live hardware telemetry & pulse log
-curl http://127.0.0.1:4000/api/hardware/debug
+curl -H "X-Daemon-Secret: $SECRET" http://127.0.0.1:4000/api/hardware/debug
 ```
 
 ---

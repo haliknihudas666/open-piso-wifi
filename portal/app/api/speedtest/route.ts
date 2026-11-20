@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
 import { runRouterSpeedtest } from '@/lib/daemon';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -196,7 +197,10 @@ export async function GET() {
  * POST /api/speedtest
  * Force re-run an on-demand speed test and update cache
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {

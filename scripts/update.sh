@@ -87,12 +87,12 @@ if [ -z "$GITHUB_TOKEN" ] && [ -f "$HOME/.github_token" ]; then
     GITHUB_TOKEN=$(cat "$HOME/.github_token" | tr -d '\r\n ')
 fi
 
-# Check sudo access (probe systemctl first as it is explicitly granted in sudoers)
+# Check sudo access (probe an exact permitted NOPASSWD command)
 SUDO_CMD=""
 HAS_SUDO_ACCESS=false
 if [ "$EUID" -eq 0 ]; then
     HAS_SUDO_ACCESS=true
-elif sudo -n systemctl --version >/dev/null 2>&1 || sudo -n true >/dev/null 2>&1; then
+elif sudo -n systemctl daemon-reload >/dev/null 2>&1; then
     HAS_SUDO_ACCESS=true
     SUDO_CMD="sudo"
 fi
@@ -117,6 +117,8 @@ echo -e "• Installed Version: ${YELLOW}${CURRENT_VERSION}${NC}"
 
 LATEST_TAG=""
 ASSET_ID=""
+SHA_ASSET_ID=""
+SHA_FILENAME="${RELEASE_TARBALL}.sha256"
 API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
 query_github_release() {
@@ -147,6 +149,15 @@ parse_release_json() {
                 } catch(e){}
             });
         ' "$RELEASE_TARBALL" 2>/dev/null || echo "")
+        SHA_ASSET_ID=$(echo "$json" | node -e '
+            let d=""; process.stdin.on("data", c=>d+=c); process.stdin.on("end", ()=>{
+                try {
+                    const j=JSON.parse(d);
+                    const a=j.assets?.find(x=>x.name===process.argv[1]);
+                    if(a?.id) console.log(a.id);
+                } catch(e){}
+            });
+        ' "$SHA_FILENAME" 2>/dev/null || echo "")
     fi
 
     if [ -z "$LATEST_TAG" ]; then
@@ -155,11 +166,17 @@ parse_release_json() {
     if [ -z "$ASSET_ID" ]; then
         ASSET_ID=$(echo "$json" | awk -v name="$RELEASE_TARBALL" '
             /"id":/ { id=$2; gsub(/[^0-9]/, "", id) }
-            $0 ~ name { if (id != "") { print id; exit } }
+            $0 ~ ("\"name\":[[:space:]]*\"" name "\"") { if (id != "") { print id; exit } }
         ')
         if [ -z "$ASSET_ID" ]; then
             ASSET_ID=$(echo "$json" | grep -B 4 "\"name\": \"${RELEASE_TARBALL}\"" | grep '"id":' | head -n1 | tr -dc '0-9')
         fi
+    fi
+    if [ -z "$SHA_ASSET_ID" ]; then
+        SHA_ASSET_ID=$(echo "$json" | awk -v name="$SHA_FILENAME" '
+            /"id":/ { id=$2; gsub(/[^0-9]/, "", id) }
+            $0 ~ ("\"name\":[[:space:]]*\"" name "\"") { if (id != "") { print id; exit } }
+        ')
     fi
 }
 
@@ -296,23 +313,29 @@ echo ""
 echo -e "${PURPLE}[3/6] Downloading & extracting pre-built update bundle...${NC}"
 
 TEMP_TARBALL="/tmp/${RELEASE_TARBALL}"
-rm -f "$TEMP_TARBALL"
+TEMP_SHA="/tmp/${SHA_FILENAME}"
+rm -f "$TEMP_TARBALL" "$TEMP_SHA"
 
 if [ -f "$ROOT_DIR/dist/${RELEASE_TARBALL}" ]; then
     echo -e "--> Using local distribution package: $ROOT_DIR/dist/${RELEASE_TARBALL}"
     cp "$ROOT_DIR/dist/${RELEASE_TARBALL}" "$TEMP_TARBALL"
+    [ -f "$ROOT_DIR/dist/${SHA_FILENAME}" ] && cp "$ROOT_DIR/dist/${SHA_FILENAME}" "$TEMP_SHA"
 elif [ -f "/tmp/${RELEASE_TARBALL}.manual" ]; then
     echo -e "--> Using manually downloaded update package: /tmp/${RELEASE_TARBALL}.manual"
     cp -f "/tmp/${RELEASE_TARBALL}.manual" "$TEMP_TARBALL"
+    [ -f "/tmp/${SHA_FILENAME}.manual" ] && cp -f "/tmp/${SHA_FILENAME}.manual" "$TEMP_SHA"
+    [ -f "/tmp/${SHA_FILENAME}" ] && [ ! -f "$TEMP_SHA" ] && cp -f "/tmp/${SHA_FILENAME}" "$TEMP_SHA"
 else
     DOWNLOAD_SUCCESS=false
-    
-    # 1. Direct public release download (Primary for public repositories)
+
+    # 1. Direct public release download (Primary for public repositories; prefer pinned LATEST_TAG)
     echo -e "--> Attempting direct download from GitHub Releases..."
-    if curl -fSL --progress-bar "https://github.com/${GITHUB_REPO}/releases/latest/download/${RELEASE_TARBALL}" -o "$TEMP_TARBALL" 2>/dev/null; then
+    if [ -n "$LATEST_TAG" ] && curl -fSL --progress-bar "https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${RELEASE_TARBALL}" -o "$TEMP_TARBALL" 2>/dev/null; then
         DOWNLOAD_SUCCESS=true
-    elif [ -n "$LATEST_TAG" ] && curl -fSL --progress-bar "https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${RELEASE_TARBALL}" -o "$TEMP_TARBALL" 2>/dev/null; then
+        curl -fsSL "https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${SHA_FILENAME}" -o "$TEMP_SHA" 2>/dev/null || rm -f "$TEMP_SHA"
+    elif curl -fSL --progress-bar "https://github.com/${GITHUB_REPO}/releases/latest/download/${RELEASE_TARBALL}" -o "$TEMP_TARBALL" 2>/dev/null; then
         DOWNLOAD_SUCCESS=true
+        curl -fsSL "https://github.com/${GITHUB_REPO}/releases/latest/download/${SHA_FILENAME}" -o "$TEMP_SHA" 2>/dev/null || rm -f "$TEMP_SHA"
     fi
 
     # 2. Authenticated GitHub API download fallback (For private repositories or forks)
@@ -324,6 +347,13 @@ else
              "https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${ASSET_ID}" \
              -o "$TEMP_TARBALL"; then
             DOWNLOAD_SUCCESS=true
+            if [ -n "$SHA_ASSET_ID" ]; then
+                curl -fsSL \
+                    -H "Authorization: Bearer $GITHUB_TOKEN" \
+                    -H "Accept: application/octet-stream" \
+                    "https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${SHA_ASSET_ID}" \
+                    -o "$TEMP_SHA" 2>/dev/null || rm -f "$TEMP_SHA"
+            fi
         fi
     fi
 
@@ -333,32 +363,64 @@ else
         echo -e "  1. CLI Flag:  ${YELLOW}bash scripts/update.sh --token <YOUR_GITHUB_TOKEN>${NC}"
         echo -e "  2. In .env:   ${YELLOW}echo 'GITHUB_TOKEN=\"<YOUR_TOKEN>\"' >> pisowifi-portal/.env${NC}"
         echo -e "  3. In home:   ${YELLOW}echo '<YOUR_TOKEN>' > ~/.github_token${NC}"
+        rm -f "$TEMP_TARBALL" "$TEMP_SHA"
         rm -rf "$BACKUP_DIR"
         exit 1
     fi
 fi
+
+# Verify SHA-256 checksum via sha256sum before extracting if checksum file is available
+if [ -s "$TEMP_SHA" ]; then
+    echo -e "--> Verifying SHA-256 checksum of ${RELEASE_TARBALL}..."
+    EXPECTED_SHA=$(awk '{print $1}' "$TEMP_SHA" | head -n1 | tr -d '\r\n ')
+    if ! echo "$EXPECTED_SHA" | grep -Eq '^[a-fA-F0-9]{64}$'; then
+        echo -e "${RED}❌ SECURITY ERROR: Invalid SHA-256 checksum format in ${SHA_FILENAME}. Aborting update.${NC}"
+        rm -f "$TEMP_TARBALL" "$TEMP_SHA"
+        rm -rf "$BACKUP_DIR"
+        exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        if ! (cd "$(dirname "$TEMP_TARBALL")" && printf '%s  %s\n' "$EXPECTED_SHA" "$(basename "$TEMP_TARBALL")" | sha256sum -c - >/dev/null 2>&1); then
+            ACTUAL_SHA=$(sha256sum "$TEMP_TARBALL" | awk '{print $1}')
+            echo -e "${RED}❌ SECURITY ERROR: SHA-256 checksum mismatch for ${RELEASE_TARBALL}!${NC}"
+            echo -e "${RED}   Expected: ${EXPECTED_SHA}${NC}"
+            echo -e "${RED}   Actual:   ${ACTUAL_SHA}${NC}"
+            rm -f "$TEMP_TARBALL" "$TEMP_SHA"
+            rm -rf "$BACKUP_DIR"
+            exit 1
+        fi
+        echo -e "${GREEN}✓ SHA-256 checksum verified (${EXPECTED_SHA:0:12}...).${NC}"
+    else
+        echo -e "${YELLOW}Notice: sha256sum not available; skipping checksum verification.${NC}"
+    fi
+else
+    echo -e "${YELLOW}Notice: ${SHA_FILENAME} not present on release; skipping checksum verification.${NC}"
+fi
+rm -f "$TEMP_SHA"
 
 echo -e "--> Extracting updated files into ${ROOT_DIR}..."
 tar -xzf "$TEMP_TARBALL" -C "$ROOT_DIR"
 rm -f "$TEMP_TARBALL"
 
 # Self-heal Turbopack & standalone @prisma/client and .prisma runtime paths
-PORTAL_DIR="$ROOT_DIR/pisowifi-portal"
-if [ -d "$PORTAL_DIR/node_modules/@prisma/client" ]; then
-    mkdir -p "$PORTAL_DIR/.next/node_modules/@prisma"
-    for item in "$PORTAL_DIR/.next/node_modules/@prisma"/client-*; do
-        if [ -L "$item" ] || [ ! -e "$item" ]; then
-            rm -rf "$item"
-            ln -sfn "$PORTAL_DIR/node_modules/@prisma/client" "$item" 2>/dev/null || cp -rf "$PORTAL_DIR/node_modules/@prisma/client" "$item" 2>/dev/null || true
-        fi
-    done
-fi
+for PDIR in "$ROOT_DIR/portal" "$ROOT_DIR/pisowifi-portal"; do
+    [ -d "$PDIR" ] || continue
+    if [ -d "$PDIR/node_modules/@prisma/client" ]; then
+        mkdir -p "$PDIR/.next/node_modules/@prisma"
+        for item in "$PDIR/.next/node_modules/@prisma"/client-*; do
+            if [ -L "$item" ] || [ ! -e "$item" ]; then
+                rm -rf "$item"
+                ln -sfn "$PDIR/node_modules/@prisma/client" "$item" 2>/dev/null || cp -rf "$PDIR/node_modules/@prisma/client" "$item" 2>/dev/null || true
+            fi
+        done
+    fi
 
-if [ -d "$PORTAL_DIR/node_modules/.prisma" ]; then
-    mkdir -p "$PORTAL_DIR/.next/node_modules"
-    rm -rf "$PORTAL_DIR/.next/node_modules/.prisma"
-    ln -sfn "$PORTAL_DIR/node_modules/.prisma" "$PORTAL_DIR/.next/node_modules/.prisma" 2>/dev/null || cp -rf "$PORTAL_DIR/node_modules/.prisma" "$PORTAL_DIR/.next/node_modules/.prisma" 2>/dev/null || true
-fi
+    if [ -d "$PDIR/node_modules/.prisma" ]; then
+        mkdir -p "$PDIR/.next/node_modules"
+        rm -rf "$PDIR/.next/node_modules/.prisma"
+        ln -sfn "$PDIR/node_modules/.prisma" "$PDIR/.next/node_modules/.prisma" 2>/dev/null || cp -rf "$PDIR/node_modules/.prisma" "$PDIR/.next/node_modules/.prisma" 2>/dev/null || true
+    fi
+done
 
 echo -e "${GREEN}✓ Updated bundle extracted successfully.${NC}"
 
@@ -392,21 +454,124 @@ fi
 [ -f "$BACKUP_DIR/portal.env" ] && cp -f "$BACKUP_DIR/portal.env" "$TARGET_PORTAL/.env"
 [ -f "$BACKUP_DIR/daemon.env" ] && cp -f "$BACKUP_DIR/daemon.env" "$TARGET_DAEMON/.env"
 
+# Ensure portal/.env and daemon/.env exist and share strong 32-byte random hex secrets
+mkdir -p "$TARGET_PORTAL" "$TARGET_DAEMON"
+touch "$TARGET_PORTAL/.env" "$TARGET_DAEMON/.env"
+
+is_placeholder_secret() {
+    local val="$1"
+    [ -z "$val" ] && return 0
+    case "$val" in
+        change-me*|openpiso-satellite-secret-2024|changeme|placeholder|secret|your-*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+generate_hex_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    elif command -v node >/dev/null 2>&1; then
+        node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+    else
+        od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+    fi
+}
+
+read_env_val() {
+    local file="$1"
+    local key="$2"
+    [ -f "$file" ] || return 0
+    grep -E "^${key}=" "$file" 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true
+}
+
+upsert_env_val() {
+    local file="$1"
+    local key="$2"
+    local val="$3"
+    local quoted="$4"
+    local line="${key}=${val}"
+    [ "$quoted" = "true" ] && line="${key}=\"${val}\""
+    if grep -qE "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${line}|" "$file" 2>/dev/null || true
+    else
+        echo "$line" >> "$file"
+    fi
+}
+
+DAEMON_API_SECRET=$(read_env_val "$TARGET_PORTAL/.env" "DAEMON_API_SECRET")
+if is_placeholder_secret "$DAEMON_API_SECRET"; then
+    DAEMON_API_SECRET=$(read_env_val "$TARGET_DAEMON/.env" "DAEMON_API_SECRET")
+fi
+if is_placeholder_secret "$DAEMON_API_SECRET"; then
+    DAEMON_API_SECRET=$(generate_hex_secret)
+fi
+upsert_env_val "$TARGET_PORTAL/.env" "DAEMON_API_SECRET" "$DAEMON_API_SECRET" "true"
+upsert_env_val "$TARGET_DAEMON/.env" "DAEMON_API_SECRET" "$DAEMON_API_SECRET" "false"
+
+SATELLITE_SECRET=$(read_env_val "$TARGET_DAEMON/.env" "SATELLITE_SECRET")
+[ -z "$SATELLITE_SECRET" ] && SATELLITE_SECRET=$(read_env_val "$TARGET_DAEMON/.env" "SLOT_SECRET")
+if is_placeholder_secret "$SATELLITE_SECRET"; then
+    SATELLITE_SECRET=$(generate_hex_secret)
+fi
+upsert_env_val "$TARGET_DAEMON/.env" "SATELLITE_SECRET" "$SATELLITE_SECRET" "false"
+
+SHIELD_SECRET=$(read_env_val "$TARGET_DAEMON/.env" "SHIELD_SECRET")
+if is_placeholder_secret "$SHIELD_SECRET"; then
+    SHIELD_SECRET=$(generate_hex_secret)
+fi
+upsert_env_val "$TARGET_DAEMON/.env" "SHIELD_SECRET" "$SHIELD_SECRET" "false"
+
+if [ -z "$(read_env_val "$TARGET_DAEMON/.env" "COIN_GPIO_PIN")" ]; then
+    upsert_env_val "$TARGET_DAEMON/.env" "COIN_GPIO_PIN" "4" "false"
+fi
+if [ -z "$(read_env_val "$TARGET_DAEMON/.env" "INHIBIT_GPIO_PIN")" ]; then
+    upsert_env_val "$TARGET_DAEMON/.env" "INHIBIT_GPIO_PIN" "17" "false"
+fi
+
 # Sanitize DATABASE_URL in portal.env if it points to file:./prisma/dev.db
 if [ -f "$TARGET_PORTAL/.env" ]; then
     sed -i 's|DATABASE_URL="file:./prisma/dev.db"|DATABASE_URL="file:./dev.db"|g' "$TARGET_PORTAL/.env" 2>/dev/null || true
 fi
 
-# Auto-migrate schema: ensure newly added columns exist in restored database
+# Auto-migrate schema: ensure newly added tables, columns & indexes exist in restored database
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$TARGET_PORTAL/prisma/dev.db" ]; then
-    echo -e "--> Verifying database schema & migrating columns..."
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'ALTER TABLE "Session" ADD COLUMN "sessionToken" TEXT;' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'CREATE UNIQUE INDEX IF NOT EXISTS "Session_sessionToken_key" ON "Session"("sessionToken");' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'CREATE INDEX IF NOT EXISTS "Session_sessionToken_idx" ON "Session"("sessionToken");' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'ALTER TABLE "Session" ADD COLUMN "deviceName" TEXT;' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'ALTER TABLE "Session" ADD COLUMN "transferCode" TEXT;' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'CREATE UNIQUE INDEX IF NOT EXISTS "Session_transferCode_key" ON "Session"("transferCode");' 2>/dev/null || true
-    sqlite3 "$TARGET_PORTAL/prisma/dev.db" 'CREATE INDEX IF NOT EXISTS "Session_transferCode_idx" ON "Session"("transferCode");' 2>/dev/null || true
+    echo -e "--> Verifying database schema & migrating tables/columns..."
+    DB_PATH="$TARGET_PORTAL/prisma/dev.db"
+    sqlite3 "$DB_PATH" 'ALTER TABLE "Session" ADD COLUMN "sessionToken" TEXT;' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE UNIQUE INDEX IF NOT EXISTS "Session_sessionToken_key" ON "Session"("sessionToken");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "Session_sessionToken_idx" ON "Session"("sessionToken");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'ALTER TABLE "Session" ADD COLUMN "deviceName" TEXT;' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'ALTER TABLE "Session" ADD COLUMN "transferCode" TEXT;' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE UNIQUE INDEX IF NOT EXISTS "Session_transferCode_key" ON "Session"("transferCode");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "Session_transferCode_idx" ON "Session"("transferCode");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'ALTER TABLE "Voucher" ADD COLUMN "isRevoked" BOOLEAN NOT NULL DEFAULT false;' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'ALTER TABLE "Voucher" ADD COLUMN "revokedAt" DATETIME;' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "Voucher_isRevoked_idx" ON "Voucher"("isRevoked");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'CREATE TABLE IF NOT EXISTS "CashCollection" ("id" TEXT NOT NULL PRIMARY KEY, "amount" REAL NOT NULL, "collectedBy" TEXT NOT NULL DEFAULT '\''Admin'\'', "notes" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "CashCollection_createdAt_idx" ON "CashCollection"("createdAt");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'CREATE TABLE IF NOT EXISTS "FreeTrialClaim" ("id" TEXT NOT NULL PRIMARY KEY, "macAddress" TEXT NOT NULL, "ipAddress" TEXT, "claimedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "FreeTrialClaim_macAddress_idx" ON "FreeTrialClaim"("macAddress");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "FreeTrialClaim_claimedAt_idx" ON "FreeTrialClaim"("claimedAt");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'CREATE TABLE IF NOT EXISTS "DeviceRule" ("id" TEXT NOT NULL PRIMARY KEY, "macAddress" TEXT NOT NULL, "name" TEXT NOT NULL, "type" TEXT NOT NULL, "notes" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL);' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE UNIQUE INDEX IF NOT EXISTS "DeviceRule_macAddress_key" ON "DeviceRule"("macAddress");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "DeviceRule_macAddress_idx" ON "DeviceRule"("macAddress");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "DeviceRule_type_idx" ON "DeviceRule"("type");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'CREATE TABLE IF NOT EXISTS "LoyaltyStreak" ("id" TEXT NOT NULL PRIMARY KEY, "sessionCode" TEXT NOT NULL, "macAddress" TEXT, "deviceName" TEXT, "currentStreak" INTEGER NOT NULL DEFAULT 0, "highestStreak" INTEGER NOT NULL DEFAULT 0, "lastCreditDate" TEXT, "lastCreditedAt" DATETIME, "totalCredits" INTEGER NOT NULL DEFAULT 0, "totalAmountSpent" REAL NOT NULL DEFAULT 0, "totalBonusMinutes" INTEGER NOT NULL DEFAULT 0, "lastBonusReward" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL);' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE UNIQUE INDEX IF NOT EXISTS "LoyaltyStreak_sessionCode_key" ON "LoyaltyStreak"("sessionCode");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "LoyaltyStreak_sessionCode_idx" ON "LoyaltyStreak"("sessionCode");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "LoyaltyStreak_macAddress_idx" ON "LoyaltyStreak"("macAddress");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "LoyaltyStreak_currentStreak_idx" ON "LoyaltyStreak"("currentStreak");' 2>/dev/null || true
+
+    sqlite3 "$DB_PATH" 'CREATE TABLE IF NOT EXISTS "LoyaltyClaim" ("id" TEXT NOT NULL PRIMARY KEY, "sessionCode" TEXT NOT NULL, "streakDays" INTEGER NOT NULL, "bonusMinutes" INTEGER NOT NULL, "rewardTitle" TEXT NOT NULL, "macAddress" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "LoyaltyClaim_sessionCode_idx" ON "LoyaltyClaim"("sessionCode");' 2>/dev/null || true
+    sqlite3 "$DB_PATH" 'CREATE INDEX IF NOT EXISTS "LoyaltyClaim_createdAt_idx" ON "LoyaltyClaim"("createdAt");' 2>/dev/null || true
 
     if [ -f "$TARGET_PORTAL/dev.db" ]; then
         cp -f "$TARGET_PORTAL/prisma/dev.db" "$TARGET_PORTAL/dev.db" 2>/dev/null || true
@@ -420,11 +585,14 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$TARGET_PORTAL/prisma/dev.db" ]; 
     fi
 fi
 
-# Ensure proper ownership and permissions for portal SQLite database
-$SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$TARGET_PORTAL" 2>/dev/null || true
-$SUDO_CMD chmod 777 "$TARGET_PORTAL/prisma" 2>/dev/null || true
-$SUDO_CMD chmod 666 "$TARGET_PORTAL/prisma/dev.db"* 2>/dev/null || true
-$SUDO_CMD chmod 666 "$TARGET_PORTAL/dev.db"* 2>/dev/null || true
+# Ensure proper ownership and permissions for portal SQLite database & .env files
+if [ "$EUID" -eq 0 ]; then
+    chown -R "${CURRENT_USER}:${CURRENT_USER}" "$TARGET_PORTAL" 2>/dev/null || true
+fi
+chmod 600 "$TARGET_PORTAL/.env" "$TARGET_DAEMON/.env" 2>/dev/null || true
+chmod 775 "$TARGET_PORTAL/prisma" 2>/dev/null || true
+chmod 660 "$TARGET_PORTAL/prisma/dev.db"* 2>/dev/null || true
+chmod 660 "$TARGET_PORTAL/dev.db"* 2>/dev/null || true
 
 # Verify and install Hardware Daemon production dependencies
 if [ -d "$TARGET_DAEMON" ] && [ -f "$TARGET_DAEMON/package.json" ]; then
@@ -433,7 +601,9 @@ if [ -d "$TARGET_DAEMON" ] && [ -f "$TARGET_DAEMON/package.json" ]; then
         (cd "$TARGET_DAEMON" && npm install --omit=dev --loglevel=error)
         (cd "$TARGET_DAEMON" && npm rebuild epoll --build-from-source 2>/dev/null || true)
     fi
-    $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$TARGET_DAEMON" 2>/dev/null || true
+    if [ "$EUID" -eq 0 ]; then
+        chown -R "${CURRENT_USER}:${CURRENT_USER}" "$TARGET_DAEMON" 2>/dev/null || true
+    fi
 fi
 
 # Ensure GITHUB_TOKEN is preserved in portal .env
@@ -457,35 +627,34 @@ ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
 ROUTER_USER="${ROUTER_USER:-root}"
 PORTAL_IP="${PORTAL_IP:-}"
 PORTAL_DOMAIN="${PORTAL_DOMAIN:-wifi.local}"
+PORTAL_PORT="${PORTAL_PORT:-3000}"
 SETUP_SCRIPT="$ROOT_DIR/openwrt/setup-openwrt.sh"
 
-if [ -f "$PORTAL_DIR/.env" ]; then
-    ENV_ROUTER_IP=$(grep -E '^ROUTER_IP=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_ROUTER_IP" ] && ROUTER_IP="$ENV_ROUTER_IP"
-    ENV_PORTAL_IP=$(grep -E '^PORTAL_IP=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_PORTAL_IP" ] && PORTAL_IP="$ENV_PORTAL_IP"
-    ENV_PORTAL_DOMAIN=$(grep -E '^PORTAL_DOMAIN=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_PORTAL_DOMAIN" ] && PORTAL_DOMAIN="$ENV_PORTAL_DOMAIN"
-elif [ -f "$ROOT_DIR/pisowifi-portal/.env" ]; then
-    ENV_ROUTER_IP=$(grep -E '^ROUTER_IP=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_ROUTER_IP" ] && ROUTER_IP="$ENV_ROUTER_IP"
-    ENV_PORTAL_IP=$(grep -E '^PORTAL_IP=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_PORTAL_IP" ] && PORTAL_IP="$ENV_PORTAL_IP"
-    ENV_PORTAL_DOMAIN=$(grep -E '^PORTAL_DOMAIN=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_PORTAL_DOMAIN" ] && PORTAL_DOMAIN="$ENV_PORTAL_DOMAIN"
-fi
+for PENV in "$TARGET_PORTAL/.env" "$PORTAL_DIR/.env" "$ROOT_DIR/pisowifi-portal/.env"; do
+    if [ -f "$PENV" ]; then
+        ENV_ROUTER_IP=$(read_env_val "$PENV" "ROUTER_IP")
+        [ -n "$ENV_ROUTER_IP" ] && ROUTER_IP="$ENV_ROUTER_IP"
+        ENV_PORTAL_IP=$(read_env_val "$PENV" "PORTAL_IP")
+        [ -n "$ENV_PORTAL_IP" ] && PORTAL_IP="$ENV_PORTAL_IP"
+        ENV_PORTAL_DOMAIN=$(read_env_val "$PENV" "PORTAL_DOMAIN")
+        [ -n "$ENV_PORTAL_DOMAIN" ] && PORTAL_DOMAIN="$ENV_PORTAL_DOMAIN"
+        ENV_PORTAL_PORT=$(read_env_val "$PENV" "PORTAL_PORT")
+        [ -n "$ENV_PORTAL_PORT" ] && PORTAL_PORT="$ENV_PORTAL_PORT"
+        break
+    fi
+done
 
 if [ -z "$PORTAL_IP" ]; then
     PORTAL_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || hostname -I 2>/dev/null | awk '{print $1}' || echo "")
 fi
 
-if [ -f "$DAEMON_DIR/.env" ]; then
-    ENV_ROUTER_USER=$(grep -E '^ROUTER_SSH_USER=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_ROUTER_USER" ] && ROUTER_USER="$ENV_ROUTER_USER"
-elif [ -f "$ROOT_DIR/pisowifi-daemon/.env" ]; then
-    ENV_ROUTER_USER=$(grep -E '^ROUTER_SSH_USER=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$ENV_ROUTER_USER" ] && ROUTER_USER="$ENV_ROUTER_USER"
-fi
+for DENV in "$TARGET_DAEMON/.env" "$DAEMON_DIR/.env" "$ROOT_DIR/pisowifi-daemon/.env"; do
+    if [ -f "$DENV" ]; then
+        ENV_ROUTER_USER=$(read_env_val "$DENV" "ROUTER_SSH_USER")
+        [ -n "$ENV_ROUTER_USER" ] && ROUTER_USER="$ENV_ROUTER_USER"
+        break
+    fi
+done
 
 if [ -f "$SETUP_SCRIPT" ] && ping -c 1 -W 2 "$ROUTER_IP" >/dev/null 2>&1; then
     SSH_KEY_ARG=""
@@ -497,7 +666,12 @@ if [ -f "$SETUP_SCRIPT" ] && ping -c 1 -W 2 "$ROUTER_IP" >/dev/null 2>&1; then
 
     if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=4 $SSH_KEY_ARG "${ROUTER_USER}@${ROUTER_IP}" "echo OK" >/dev/null 2>&1; then
         echo -e "--> Deploying smart update to OpenWrt router (${ROUTER_IP})..."
-        tr -d '\r' < "$SETUP_SCRIPT" | ssh -o BatchMode=yes -o StrictHostKeyChecking=no $SSH_KEY_ARG "${ROUTER_USER}@${ROUTER_IP}" "cat > /tmp/setup-openwrt.sh && chmod +x /tmp/setup-openwrt.sh && /tmp/setup-openwrt.sh --update --router-ip=${ROUTER_IP} --portal-ip=${PORTAL_IP} --portal-domain=${PORTAL_DOMAIN}" || echo -e "${YELLOW}Notice: Router update completed with warnings.${NC}"
+        WIDS_ARG=""
+        if [ -n "$SHIELD_SECRET" ]; then
+            printf -v ESC_SHIELD_SECRET '%q' "$SHIELD_SECRET"
+            WIDS_ARG="--shield-secret=${ESC_SHIELD_SECRET}"
+        fi
+        tr -d '\r' < "$SETUP_SCRIPT" | ssh -o BatchMode=yes -o StrictHostKeyChecking=no $SSH_KEY_ARG "${ROUTER_USER}@${ROUTER_IP}" "cat > /tmp/setup-openwrt.sh && chmod +x /tmp/setup-openwrt.sh && /tmp/setup-openwrt.sh --update --router-ip=${ROUTER_IP} --portal-ip=${PORTAL_IP} --portal-domain=${PORTAL_DOMAIN} ${WIDS_ARG}" || echo -e "${YELLOW}Notice: Router update completed with warnings.${NC}"
         echo -e "${GREEN}✓ OpenWrt router updated (active sessions & MAC tables preserved)!${NC}"
     else
         echo -e "${YELLOW}Notice: Passwordless SSH to OpenWrt is not active. Router config update skipped.${NC}"
@@ -507,24 +681,43 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# STEP 6: RESTART SYSTEMD SERVICES
+# STEP 6: CLEAN STALE IPTABLES REDIRECT & RESTART SYSTEMD SERVICES
 # ------------------------------------------------------------------------------
 echo ""
-echo -e "${PURPLE}[6/6] Ensuring port 80 redirect & restarting background services...${NC}"
+echo -e "${PURPLE}[6/6] Updating systemd services & restarting background daemons...${NC}"
 
-if [ "$HAS_SUDO_ACCESS" = true ]; then
-    # Ensure port 80 -> 3000 NAT redirect
-    $SUDO_CMD iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3000 2>/dev/null || $SUDO_CMD iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3000 2>/dev/null || true
-    $SUDO_CMD iptables -t nat -C OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port 3000 2>/dev/null || $SUDO_CMD iptables -t nat -A OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port 3000 2>/dev/null || true
+if [ "$EUID" -eq 0 ]; then
+    # Remove legacy iptables port 80 -> 3000 REDIRECT rules so Daemon port80Server handles port 80
+    for RPORT in "${PORTAL_PORT}" 3000; do
+        while iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null; do
+            iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null; do
+            iptables -t nat -D OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null || break
+        done
+    done
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save 2>/dev/null || true
+    fi
 
-    # Ensure systemd service is using high-performance standalone server.js
+    # Remove stale ExecStartPre iptables REDIRECT lines from pisowifi-daemon.service
+    if [ -f /etc/systemd/system/pisowifi-daemon.service ]; then
+        sed -i '/iptables.*--dport 80.*REDIRECT/d' /etc/systemd/system/pisowifi-daemon.service 2>/dev/null || true
+    fi
+
+    # Ensure pisowifi-portal.service uses standalone node server.js bound to 127.0.0.1
     if [ -f /etc/systemd/system/pisowifi-portal.service ]; then
         if grep -q "npm.*start" /etc/systemd/system/pisowifi-portal.service 2>/dev/null; then
             echo -e "--> Modernizing pisowifi-portal.service to use high-speed standalone node server..."
-            $SUDO_CMD sed -i 's|ExecStart=.*npm.*start.*|ExecStart=/usr/bin/node server.js|g' /etc/systemd/system/pisowifi-portal.service 2>/dev/null || true
+            sed -i 's|ExecStart=.*npm.*start.*|ExecStart=/usr/bin/node server.js|g' /etc/systemd/system/pisowifi-portal.service 2>/dev/null || true
+        fi
+        if ! grep -q "HOSTNAME=127.0.0.1" /etc/systemd/system/pisowifi-portal.service 2>/dev/null; then
+            sed -i '/^\[Service\]/a Environment=HOSTNAME=127.0.0.1' /etc/systemd/system/pisowifi-portal.service 2>/dev/null || true
         fi
     fi
+fi
 
+if [ "$HAS_SUDO_ACCESS" = true ]; then
     $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
 
     # Restart Hardware Daemon
@@ -533,11 +726,7 @@ if [ "$HAS_SUDO_ACCESS" = true ]; then
 
     # Schedule Web Portal restart with 3-second delay so script finishes responding to browser
     echo -e "--> Scheduling Web Portal service restart (3s delay)..."
-    if command -v systemd-run >/dev/null 2>&1 && $SUDO_CMD systemd-run --version >/dev/null 2>&1; then
-        $SUDO_CMD systemd-run --on-active=3s systemctl restart pisowifi-portal.service >/dev/null 2>&1 || ( sleep 3 && $SUDO_CMD systemctl restart pisowifi-portal.service ) >/dev/null 2>&1 &
-    else
-        ( sleep 3 && $SUDO_CMD systemctl restart pisowifi-portal.service ) >/dev/null 2>&1 &
-    fi
+    ( sleep 3 && $SUDO_CMD systemctl restart pisowifi-portal.service ) >/dev/null 2>&1 &
 
     sleep 1
     DAEMON_STATUS=$(systemctl is-active pisowifi-daemon.service 2>/dev/null || echo "active")
@@ -558,5 +747,5 @@ echo -e "${CYAN}==============================================================${
 echo -e "• Hardware Daemon Service: [ ${GREEN}${DAEMON_STATUS}${NC} ]"
 echo -e "• Web Portal Service:      [ ${GREEN}${PORTAL_STATUS}${NC} ]"
 echo ""
-echo -e "🌐 System is live at: ${CYAN}http://${PORTAL_DOMAIN}/${NC} or ${CYAN}http://${PORTAL_IP}:3000/${NC}"
+echo -e "🌐 System is live at: ${CYAN}http://${PORTAL_DOMAIN}/${NC} or ${CYAN}http://${PORTAL_IP}/${NC}"
 echo -e "${CYAN}==============================================================${NC}"

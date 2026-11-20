@@ -1,19 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
-import crypto from 'node:crypto';
+import { requireAdmin } from '@/lib/admin-auth';
+import { generateSecureVoucherCode } from '@/lib/secure-codes';
 
 export const dynamic = 'force-dynamic';
 
-function generateVoucherCode(length = 6): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoid 0, O, 1, I for readability
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(crypto.randomInt(0, chars.length));
-  }
-  return result;
-}
-
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -30,11 +25,11 @@ export async function POST(request: NextRequest) {
 
     const createdVouchers = [];
     for (let i = 0; i < voucherCount; i++) {
-      let code = generateVoucherCode(6);
+      let code = generateSecureVoucherCode();
       // Ensure unique code
       let exists = await prisma.voucher.findUnique({ where: { code } });
       while (exists) {
-        code = generateVoucherCode(6);
+        code = generateSecureVoucherCode();
         exists = await prisma.voucher.findUnique({ where: { code } });
       }
 

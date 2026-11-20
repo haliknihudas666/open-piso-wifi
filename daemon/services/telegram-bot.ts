@@ -20,12 +20,29 @@ export interface TelegramBotConfig {
   adminChatId?: string;
 }
 
+export interface ShieldAlertSummary {
+  type: string;
+  severity: string;
+  message: string;
+  timestamp: number;
+}
+
 export interface MachineStatsProvider {
   getTodaySales: () => { totalAmount: number; transactionCount: number };
   getCashBoxAmount: () => number;
   resetCashBox: () => number;
   getSlotsStatus: () => Array<{ id: string; name: string; ip: string; status: string; rssi?: number }>;
   isWanOnline: () => boolean;
+  getShieldStatus?: () => {
+    stormShieldActive: boolean;
+    stormShieldRemainingSec: number;
+    counts: { deauthStorms: number; evilTwins: number; coinTampers: number; total: number };
+    recentAlerts: ShieldAlertSummary[];
+  };
+}
+
+function escapeTelegramMarkdown(text: string): string {
+  return text.replace(/([_*`\[])/g, '\\$1');
 }
 
 interface TelegramUpdate {
@@ -318,10 +335,46 @@ export class TelegramBotService {
   public notifySlotRegistered(slotId: string, slotName: string, ip: string) {
     this.sendNotification(
       `🔌 *Coinslot Satellite Online*\n` +
-      `• *ID:* \`${slotId}\`\n` +
-      `• *Name:* ${slotName}\n` +
-      `• *IP:* \`${ip}\``
+      `• *ID:* \`${escapeTelegramMarkdown(slotId)}\`\n` +
+      `• *Name:* ${escapeTelegramMarkdown(slotName)}\n` +
+      `• *IP:* \`${escapeTelegramMarkdown(ip)}\``
     );
+  }
+
+  public notifySecurityAlert(
+    type: string,
+    severity: 'high' | 'medium' | 'low',
+    details: string | Record<string, unknown>,
+    cooldownMs = 60000
+  ): Promise<boolean> {
+    const icon = severity === 'high' ? '🚨' : severity === 'medium' ? '⚠️' : 'ℹ️';
+    let detailStr = '';
+    let identifier = '';
+
+    if (typeof details === 'string') {
+      detailStr = escapeTelegramMarkdown(details);
+      identifier = details.slice(0, 64);
+    } else if (details && typeof details === 'object') {
+      const lines: string[] = [];
+      for (const [k, v] of Object.entries(details)) {
+        if (v === undefined || v === null || v === '') continue;
+        const safeKey = escapeTelegramMarkdown(k);
+        const safeVal = escapeTelegramMarkdown(String(v));
+        lines.push(`• *${safeKey}:* ${safeVal}`);
+      }
+      detailStr = lines.join('\n');
+      identifier = String(details.bssid || details.mac || details.ssid || details.message || '');
+    }
+
+    const dedupeKey = `shield:${type}:${severity}:${identifier}`;
+    const headerType = escapeTelegramMarkdown(type.toUpperCase());
+    const text =
+      `${icon} *OpenPiso Shield Alert*\n` +
+      `• *Type:* \`${headerType}\`\n` +
+      `• *Severity:* *${severity.toUpperCase()}*\n` +
+      (detailStr ? (typeof details === 'string' ? `• *Details:* ${detailStr}` : detailStr) : '');
+
+    return this.sendNotification(text, { dedupeKey, cooldownMs });
   }
 
   // --- Inbound Long-Polling Engine ---
@@ -370,7 +423,7 @@ export class TelegramBotService {
       return;
     }
 
-    const command = (text.split(' ')[0] || '').toLowerCase();
+    const command = (text.split(' ')[0] || '').toLowerCase().split('@')[0] || '';
 
     switch (command) {
       case '/start':
@@ -394,6 +447,10 @@ export class TelegramBotService {
         await this.handleWanCommand();
         break;
 
+      case '/shield':
+        await this.handleShieldCommand();
+        break;
+
       default:
         // Ignore non-command messages
         break;
@@ -407,6 +464,7 @@ export class TelegramBotService {
       '• `/slots` — Live status of all ESP32 coin slots\n' +
       '• `/emptybox` — Reset cash box counter after collecting\n' +
       '• `/wan` — Check live internet connectivity status\n' +
+      '• `/shield` — Check OpenPiso Shield & security alerts\n' +
       '• `/help` — Display this command menu';
     await this.sendNotification(msg);
   }
@@ -466,5 +524,35 @@ export class TelegramBotService {
     const online = this.statsProvider.isWanOnline();
     const status = online ? '🟢 Online (Operational)' : '🔴 Offline (Disconnected)';
     await this.sendNotification(`🌐 *WAN Status:* ${status}`);
+  }
+
+  private async handleShieldCommand() {
+    if (!this.statsProvider?.getShieldStatus) {
+      await this.sendNotification('🛡️ *OpenPiso Shield:* Telemetry not initialized.');
+      return;
+    }
+
+    const shield = this.statsProvider.getShieldStatus();
+    const stormText = shield.stormShieldActive
+      ? `🔴 ENGAGED (${shield.stormShieldRemainingSec}s remaining)`
+      : '🟢 Armed (Standby)';
+
+    let msg =
+      '🛡️ *OpenPiso Shield Status*\n\n' +
+      `• *Storm Shield:* ${stormText}\n` +
+      `• *Deauth Storms:* ${shield.counts.deauthStorms}\n` +
+      `• *Evil Twins:* ${shield.counts.evilTwins}\n` +
+      `• *Coin Tampers:* ${shield.counts.coinTampers}\n` +
+      `• *Total Alerts:* ${shield.counts.total}`;
+
+    if (shield.recentAlerts.length > 0) {
+      msg += '\n\n*Recent Alerts:*\n';
+      for (const a of shield.recentAlerts.slice(0, 3)) {
+        const timeStr = new Date(a.timestamp).toLocaleTimeString('en-PH');
+        msg += `• [${escapeTelegramMarkdown(a.severity.toUpperCase())}] \`${escapeTelegramMarkdown(a.type)}\`: ${escapeTelegramMarkdown(a.message)} (${timeStr})\n`;
+      }
+    }
+
+    await this.sendNotification(msg, { skipDedupe: true });
   }
 }

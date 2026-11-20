@@ -39,7 +39,7 @@ export class SupabaseSyncService {
   private key: string | null = null;
   private machineId: string = 'openpiso-kiosk-1';
   private isEnabled = false;
-  private offlineQueue: Array<{ table: string; payload: any }> = [];
+  private offlineQueue: Array<{ table: string; payload: unknown; options?: { upsert?: boolean } }> = [];
   private readonly MAX_OFFLINE_QUEUE = 150;
   private isFlushing = false;
 
@@ -119,6 +119,40 @@ export class SupabaseSyncService {
   }
 
   /**
+   * Best-effort security event telemetry (fail-soft if table is not provisioned in Supabase).
+   */
+  public async recordSecurityAlert(alert: {
+    type: string;
+    severity: string;
+    message: string;
+    mac?: string;
+    bssid?: string;
+    ssid?: string;
+    band?: string;
+    count?: number;
+  }): Promise<void> {
+    if (!this.isEnabled) return;
+
+    const row = {
+      machine_id: this.machineId,
+      event_type: alert.type,
+      severity: alert.severity,
+      message: alert.message,
+      metadata: {
+        mac: alert.mac,
+        bssid: alert.bssid,
+        ssid: alert.ssid,
+        band: alert.band,
+        count: alert.count,
+      },
+      created_at: new Date().toISOString(),
+    };
+
+    // Best-effort only: do not enqueue into offlineQueue so missing optional schema won't clog queue
+    await this.sendRestRequest('piso_security_events', row);
+  }
+
+  /**
    * Flushes any queued offline records once internet is restored.
    */
   public async flushOfflineQueue(): Promise<void> {
@@ -129,7 +163,7 @@ export class SupabaseSyncService {
     const remaining: typeof this.offlineQueue = [];
 
     for (const item of this.offlineQueue) {
-      const ok = await this.sendRestRequest(item.table, item.payload);
+      const ok = await this.sendRestRequest(item.table, item.payload, item.options);
       if (!ok) {
         remaining.push(item);
       }
@@ -162,12 +196,13 @@ export class SupabaseSyncService {
     this.isPollingCommands = true;
 
     try {
-      const endpoint = `${this.url}/rest/v1/piso_commands?machine_id=eq.${this.machineId}&status=eq.pending&order=created_at.asc&limit=5`;
+      const endpoint = `${this.url}/rest/v1/piso_commands?machine_id=eq.${encodeURIComponent(this.machineId)}&status=eq.pending&order=created_at.asc&limit=5`;
       const res = await fetch(endpoint, {
         headers: {
           'apikey': this.key!,
           'Authorization': `Bearer ${this.key!}`,
         },
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!res.ok) return;
@@ -212,7 +247,7 @@ export class SupabaseSyncService {
 
   private async patchCommandStatus(id: string, status: string, result?: any): Promise<boolean> {
     try {
-      const endpoint = `${this.url}/rest/v1/piso_commands?id=eq.${id}`;
+      const endpoint = `${this.url}/rest/v1/piso_commands?id=eq.${encodeURIComponent(id)}`;
       const payload: any = {
         status,
         result: result || {},
@@ -230,6 +265,7 @@ export class SupabaseSyncService {
           'Prefer': 'return=minimal',
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
       });
 
       return res.ok;
@@ -240,16 +276,16 @@ export class SupabaseSyncService {
 
   // --- Private HTTP Core ---
 
-  private async postOrQueue(table: string, payload: any, options?: { upsert?: boolean }) {
+  private async postOrQueue(table: string, payload: unknown, options?: { upsert?: boolean }) {
     const ok = await this.sendRestRequest(table, payload, options);
     if (!ok) {
       if (this.offlineQueue.length < this.MAX_OFFLINE_QUEUE) {
-        this.offlineQueue.push({ table, payload });
+        this.offlineQueue.push({ table, payload, options });
       }
     }
   }
 
-  private async sendRestRequest(table: string, payload: any, options?: { upsert?: boolean }): Promise<boolean> {
+  private async sendRestRequest(table: string, payload: unknown, options?: { upsert?: boolean }): Promise<boolean> {
     try {
       const endpoint = `${this.url}/rest/v1/${table}`;
       const headers: Record<string, string> = {
@@ -263,6 +299,7 @@ export class SupabaseSyncService {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
       });
 
       return res.ok;

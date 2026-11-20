@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isClientAuthenticated } from '@/lib/auth-check';
-import { setDaemonWhitelist, authorizeClientMac, deauthorizeClientMac } from '@/lib/daemon';
+import { setDaemonWhitelist, authorizeClientMac } from '@/lib/daemon';
 import { getPortalRedirectUrl } from '@/lib/portal-url';
+import { getTrustedClientIp } from '@/lib/client-ip';
 
 /**
  * Apple iOS / macOS Captive Portal Probe Handler
@@ -10,10 +11,7 @@ import { getPortalRedirectUrl } from '@/lib/portal-url';
  * - If unauthenticated: Return 302 Redirect to Portal URL.
  */
 export async function GET(request: NextRequest) {
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    '127.0.0.1';
+  const ip = getTrustedClientIp(request);
 
   const portalUrl = await getPortalRedirectUrl(request.headers.get('host'));
   const { isAuthenticated, isVip, macAddress, remainingSeconds, deviceName, notes } = await isClientAuthenticated(ip);

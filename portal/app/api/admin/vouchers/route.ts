@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
-import { generateVoucherCode } from '@/lib/utils';
+import { generateSecureVoucherCode } from '@/lib/secure-codes';
 import { deauthorizeClientMac } from '@/lib/daemon';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -30,6 +34,9 @@ interface GenerateVoucherBody {
 }
 
 export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -47,11 +54,11 @@ export async function POST(request: NextRequest) {
     const createdVouchers = [];
 
     for (let i = 0; i < count; i++) {
-      let code = generateVoucherCode(6);
+      let code = generateSecureVoucherCode();
       // Ensure code is unique
       let exists = await prisma.voucher.findUnique({ where: { code } });
       while (exists) {
-        code = generateVoucherCode(6);
+        code = generateSecureVoucherCode();
         exists = await prisma.voucher.findUnique({ where: { code } });
       }
 
@@ -80,6 +87,9 @@ export async function POST(request: NextRequest) {
 
 // Revoke or Restore a Voucher
 export async function PATCH(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {
@@ -167,6 +177,9 @@ export async function PATCH(request: NextRequest) {
 
 // Delete single voucher or bulk purge
 export async function DELETE(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   await ensureSqlitePragmas();
 
   try {

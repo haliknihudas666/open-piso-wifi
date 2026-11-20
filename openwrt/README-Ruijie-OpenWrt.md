@@ -40,9 +40,9 @@ Complete guide for configuring the **Ruijie Reyee RG-EW1200G Pro** Gigabit AC120
             │  Raspberry Pi 3B+ / 4B / 5   │
             │  Static IP: 192.168.1.240    │
             │                              │
-            │  • Next.js Portal  (:3000)   │
-            │  • Hardware Daemon (:4000)   │
-            │  • Coin & Inhibit (PIN 3/5)  │
+            │  • Next.js Portal  (127.0.0.1:3000) │
+            │  • Hardware Daemon (:80 -> :3000)   │
+            │  • Coin & Inhibit  (PIN 7 / 11)     │
             └──────────────────────────────┘
 ```
 
@@ -115,10 +115,11 @@ cat openwrt/setup-openwrt.sh | ssh root@192.168.1.1 "cat > /tmp/setup-openwrt.sh
 - ✅ Router Gateway IP: `192.168.1.1`
 - ✅ DHCP Client Pool: `192.168.1.10` – `192.168.1.230`
 - ✅ Dual-Band Open Wi-Fi: **`OpenPisoWifi`** (2.4GHz) and **`OpenPisoWifi_5G`** (5GHz)
-- ✅ Dedicated `nftables` captive firewall table (`piso_portal`) with `piso_auth` timeout set, `piso_whitelist`, `piso_blacklist`
-- ✅ Port 80 HTTP redirection to `192.168.1.240:3000` with hairpin NAT masquerading
-- ✅ Traffic Control QoS packages (`tc-tiny`) for global bandwidth speed limiting
-- ✅ Dropbear SSH access on port 22 with persistent key authorization
+- ✅ Dedicated `nftables` captive firewall table (`piso_portal`) with `piso_auth` timeout set, `piso_whitelist`, `piso_blacklist`, DNS tunnel prevention, and guest LuCI/SSH lockdown
+- ✅ Port 80 HTTP redirection to `192.168.1.240:80` (Daemon HMAC-signed reverse proxy) with hairpin NAT masquerading
+- ✅ OpenPiso Shield: OWE + 802.11w PMF (when supported by `wpad`), AP Client Isolation (`isolate=1`), and `piso-wids` deauth storm / Evil Twin detector
+- ✅ Traffic Control QoS packages (`cake` / `tc-tiny`) for global bandwidth speed limiting
+- ✅ Dropbear SSH access on port 22 (auto-disables password auth once SSH keys are authorized)
 
 ---
 
@@ -155,7 +156,7 @@ This generates `~/.ssh/id_rsa` and appends it to `/etc/dropbear/authorized_keys`
    ```
 3. **Connect a Phone to Wi-Fi:**
    - Connect to `OpenPisoWifi` or `OpenPisoWifi_5G`.
-   - The phone captive popup will immediately trigger and open `http://192.168.1.240:3000`.
+   - The phone captive popup will immediately trigger and open `http://192.168.1.240` (or `http://wifi.local`).
    - Drop a coin (or click test simulator button) and click **Connect**.
    - Your phone will be instantly granted internet access!
 

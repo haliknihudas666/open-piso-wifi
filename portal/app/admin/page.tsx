@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import useSWR from 'swr';
 import {
   RefreshCw,
@@ -13,6 +13,7 @@ import {
   Radio,
   GitBranch,
   Shield,
+  ShieldAlert,
   Cpu,
   Palette,
   Tag,
@@ -24,6 +25,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { CloudSyncCard } from '@/components/admin/CloudSyncCard';
+import { SecurityShieldCard } from '@/components/admin/SecurityShieldCard';
 import { RewindShareModal } from '@/components/shared/RewindShareModal';
 import { AboutProjectCard } from '@/components/admin/AboutProjectCard';
 import { AdminLoginModal } from '@/components/admin/AdminLoginModal';
@@ -47,8 +49,6 @@ import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { safeStorage } from '@/lib/safe-storage';
-
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string; icon: any }> = {
   sessions: {
@@ -96,6 +96,11 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string; icon: any 
     subtitle: 'Permanent client device access policies and firewall enforcement',
     icon: Shield,
   },
+  security: {
+    title: 'OpenPiso Shield & Anti-Deauth',
+    subtitle: 'Zero-password OWE encryption, 802.11w PMF, WIDS attack monitor, Storm Shield & anti-tethering',
+    icon: ShieldAlert,
+  },
   system: {
     title: 'System Health & Git Updates',
     subtitle: 'Firmware status, CPU telemetry, auto-updates, and services',
@@ -130,18 +135,39 @@ export default function AdminPage() {
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [showRewindModal, setShowRewindModal] = useState(false);
 
-  // Check stored auth PIN and sidebar preference
+  // Check server-side HttpOnly admin session and sidebar preference
   useEffect(() => {
-    let pin: string | null = null;
-    try {
-      pin = sessionStorage.getItem('openpisowifi_admin_pin');
-    } catch { }
-    setIsAuthenticated(!!pin);
+    let active = true;
+    fetch('/api/admin/auth')
+      .then((res) => (res.ok ? res.json() : { authenticated: false }))
+      .then((data) => {
+        if (active) {
+          setIsAuthenticated(Boolean(data?.authenticated));
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setIsAuthenticated(false);
+        }
+      });
 
     const savedSidebar = safeStorage.getItem('openpisowifi_admin_sidebar_collapsed');
     if (savedSidebar !== null) {
       setIsSidebarCollapsed(savedSidebar === 'true');
     }
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const fetcher = useCallback(async (url: string) => {
+    const res = await fetch(url);
+    if (res.status === 401) {
+      setIsAuthenticated(false);
+      throw new Error('Unauthorized');
+    }
+    return res.json();
   }, []);
 
   const handleToggleSidebar = () => {
@@ -189,8 +215,10 @@ export default function AdminPage() {
     { refreshInterval: 15000 }
   );
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('openpisowifi_admin_pin');
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/admin/auth', { method: 'DELETE' });
+    } catch { }
     setIsAuthenticated(false);
   };
 
@@ -362,6 +390,13 @@ export default function AdminPage() {
             {activeTab === 'devices' && (
               <div className="space-y-6">
                 <DeviceManager />
+              </div>
+            )}
+
+            {/* Tab: OpenPiso Shield & Anti-Deauth */}
+            {activeTab === 'security' && (
+              <div className="space-y-6">
+                <SecurityShieldCard onUnauthorized={() => setIsAuthenticated(false)} />
               </div>
             )}
 

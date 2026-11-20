@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 interface AdminLoginModalProps {
-  onSuccess: (pin: string) => void;
+  onSuccess: () => void;
 }
 
 export function AdminLoginModal({ onSuccess }: AdminLoginModalProps) {
@@ -33,14 +33,12 @@ export function AdminLoginModal({ onSuccess }: AdminLoginModalProps) {
         body: JSON.stringify({ pin }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Invalid Admin PIN');
+        throw new Error(data.message || data.error || 'Invalid Admin PIN');
       }
 
-      // Store in sessionStorage
-      sessionStorage.setItem('openpisowifi_admin_pin', pin);
-      onSuccess(pin);
+      onSuccess();
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication error');
     } finally {

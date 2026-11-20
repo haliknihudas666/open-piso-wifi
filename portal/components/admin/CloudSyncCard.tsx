@@ -53,24 +53,32 @@ export function CloudSyncCard() {
 
   // Telegram In-Dashboard Configuration (No .env editing needed!)
   const [botToken, setBotToken] = useState('');
+  const [hasToken, setHasToken] = useState(false);
+  const [tokenMasked, setTokenMasked] = useState<string | null>(null);
   const [adminChatId, setAdminChatId] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isPollingActive, setIsPollingActive] = useState(false);
   const [showHelpGuide, setShowHelpGuide] = useState(false);
 
+  const refreshTelegramConfig = async () => {
+    try {
+      const res = await fetch('/api/telegram/config');
+      const data = await res.json();
+      if (data.success) {
+        setHasToken(Boolean(data.hasToken || data.token));
+        setTokenMasked(data.tokenMasked || null);
+        if (data.adminChatId !== undefined) {
+          setAdminChatId(data.adminChatId || '');
+        }
+        setIsPollingActive(Boolean(data.isPolling));
+      }
+    } catch { }
+  };
+
   // Load existing Telegram configuration on mount
   useEffect(() => {
-    fetch('/api/telegram/config')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          if (data.token) setBotToken(data.token);
-          if (data.adminChatId) setAdminChatId(data.adminChatId);
-          setIsPollingActive(Boolean(data.isPolling));
-        }
-      })
-      .catch(() => { });
+    refreshTelegramConfig();
   }, []);
 
   const slots = slotsData?.slots || [];
@@ -120,17 +128,31 @@ export function CloudSyncCard() {
     setIsSavingTelegram(true);
     setTelegramStatus(null);
     try {
+      const trimmedToken = botToken.trim();
+      const trimmedChatId = adminChatId.trim();
+      const payload: { adminChatId: string; token?: string } = {
+        adminChatId: trimmedChatId,
+      };
+      if (trimmedToken) {
+        payload.token = trimmedToken;
+      }
+
       const res = await fetch('/api/telegram/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: botToken, adminChatId }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setTelegramStatus('✅ Telegram bot credentials saved and synced to daemon!');
-        setIsPollingActive(Boolean(botToken.trim() && adminChatId.trim()));
+        if (trimmedToken) {
+          setBotToken('');
+          setHasToken(true);
+        }
+        setIsPollingActive(Boolean((trimmedToken || hasToken) && trimmedChatId));
+        await refreshTelegramConfig();
       } else {
-        setTelegramStatus(`❌ ${data.message || 'Failed to save Telegram credentials'}`);
+        setTelegramStatus(`❌ ${data.message || data.error || 'Failed to save Telegram credentials'}`);
       }
     } catch (err: any) {
       setTelegramStatus(`❌ Error saving Telegram credentials: ${err.message}`);
@@ -388,11 +410,21 @@ export function CloudSyncCard() {
               </label>
               <Input
                 type={showToken ? 'text' : 'password'}
-                placeholder="e.g. 7123456789:AAH... (from @BotFather)"
+                autoComplete="new-password"
+                placeholder={
+                  hasToken
+                    ? `Saved (${tokenMasked || 'hidden'}) — leave blank to keep`
+                    : 'e.g. 7123456789:AAH... (from @BotFather)'
+                }
                 value={botToken}
                 onChange={(e) => setBotToken(e.target.value)}
                 className="font-mono text-xs py-2"
               />
+              {hasToken && (
+                <p className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+                  Saved token: {tokenMasked || '********'} • Leave blank to keep existing token, or enter a new token to replace it.
+                </p>
+              )}
             </div>
 
             {/* Admin Chat ID Input */}
@@ -429,7 +461,7 @@ export function CloudSyncCard() {
               </Button>
               <Button
                 onClick={handleSendTestTelegram}
-                disabled={isSendingTelegram || !botToken}
+                disabled={isSendingTelegram || (!botToken.trim() && !hasToken)}
                 className="font-bold bg-sky-400 hover:bg-sky-500 text-black border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5 text-xs py-2.5"
               >
                 <Send className="w-3.5 h-3.5" />

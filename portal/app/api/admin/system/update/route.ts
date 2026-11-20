@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
 import { syncDaemonDeviceRules } from '@/lib/daemon';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,11 +20,17 @@ let globalUpdateState: UpdateState = {
   logs: [],
 };
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   return NextResponse.json(globalUpdateState);
 }
 
 export async function POST(req: NextRequest) {
+  const unauthorized = await requireAdmin(req);
+  if (unauthorized) return unauthorized;
+
   if (globalUpdateState.status === 'updating') {
     return NextResponse.json(
       { error: 'An update is already in progress.', state: globalUpdateState },

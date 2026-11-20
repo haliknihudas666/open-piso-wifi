@@ -53,7 +53,10 @@ export function RouterWifiCard({ initialSettings, onSaveSuccess }: RouterWifiCar
     router_ssh_port: initialSettings?.router_ssh_port || '22',
     router_ssh_user: initialSettings?.router_ssh_user || 'root',
     router_ssh_key_path: initialSettings?.router_ssh_key_path || '/root/.ssh/id_rsa',
-    router_mode: initialSettings?.router_mode || 'fw4_nftables',
+    router_mode:
+      initialSettings?.router_mode === 'iptables'
+        ? 'fw3_iptables'
+        : initialSettings?.router_mode || 'fw4_nftables',
   });
 
   const [isTestingRouter, setIsTestingRouter] = useState(false);
@@ -87,7 +90,10 @@ export function RouterWifiCard({ initialSettings, onSaveSuccess }: RouterWifiCar
         router_ssh_port: initialSettings.router_ssh_port ?? prev.router_ssh_port,
         router_ssh_user: initialSettings.router_ssh_user ?? prev.router_ssh_user,
         router_ssh_key_path: initialSettings.router_ssh_key_path ?? prev.router_ssh_key_path,
-        router_mode: initialSettings.router_mode ?? prev.router_mode,
+        router_mode:
+          initialSettings.router_mode === 'iptables'
+            ? 'fw3_iptables'
+            : initialSettings.router_mode ?? prev.router_mode,
       }));
       setQosData((prev) => ({
         speed_limit: initialSettings.speed_limit ?? prev.speed_limit,
@@ -506,7 +512,9 @@ export function RouterWifiCard({ initialSettings, onSaveSuccess }: RouterWifiCar
                 className="w-full bg-white dark:bg-[#1c241f] border-2 border-black rounded-xl px-3 py-2.5 text-xs text-black dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-black shadow-neo-sm"
               >
                 <option value="fw4_nftables">fw4 (nftables — OpenWrt 22+)</option>
-                <option value="iptables">fw3 (iptables — Legacy)</option>
+                <option value="fw3_iptables">fw3 (iptables — Legacy)</option>
+                <option value="local_linux">Standalone Pi Gateway (local nftables)</option>
+                <option value="opennds">OpenNDS</option>
               </select>
             </div>
           </div>
@@ -543,17 +551,23 @@ export function RouterWifiCard({ initialSettings, onSaveSuccess }: RouterWifiCar
             </div>
           </div>
 
-          {qosStatus && (
-            <span
-              className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border-2 border-black shadow-neo-sm flex items-center gap-1 shrink-0 ${qosStatus.enabled ? 'bg-[#4ade80] text-black' : 'bg-[#ffe17c] text-black'
+          {qosStatus && (qosStatus.active !== undefined || qosStatus.enabled !== undefined) && (() => {
+            const isQosActive = Boolean(qosStatus.active ?? qosStatus.enabled);
+            const qosDown = qosStatus.downloadMbps ?? qosStatus.downMbps ?? 0;
+            const qosUp = qosStatus.uploadMbps ?? qosStatus.upMbps ?? 0;
+            return (
+              <span
+                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border-2 border-black shadow-neo-sm flex items-center gap-1 shrink-0 ${
+                  isQosActive ? 'bg-[#4ade80] text-black' : 'bg-[#ffe17c] text-black'
                 }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-black" />
-              {qosStatus.enabled
-                ? `QoS Active (${qosStatus.downMbps}M / ${qosStatus.upMbps}M)`
-                : 'QoS Inactive'}
-            </span>
-          )}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-black" />
+                {isQosActive
+                  ? `QoS Active (${qosDown}M / ${qosUp}M)`
+                  : 'QoS Inactive'}
+              </span>
+            );
+          })()}
         </CardHeader>
 
         {qosMsg && (

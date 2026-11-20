@@ -80,7 +80,7 @@ if [ "$STATUS_CHECK" = true ]; then
   echo -e "• dnsmasq Service: $(systemctl is-active dnsmasq 2>/dev/null || echo "inactive")"
   echo -e "• nftables Service: $(systemctl is-active nftables 2>/dev/null || echo "inactive")"
   if command -v nft >/dev/null 2>&1; then
-    echo -e "• Active Authorized Clients: $(nft list set inet piso piso_auth 2>/dev/null | grep -c 'elements = {' || echo "0")"
+    echo -e "• Active Authorized Clients: $(nft list set inet piso_portal piso_auth 2>/dev/null | grep -c 'elements = {' || nft list set inet piso piso_auth 2>/dev/null | grep -c 'elements = {' || echo "0")"
   fi
   exit 0
 fi
@@ -107,6 +107,7 @@ if [ "$ROLLBACK" = true ]; then
 
   # Remove nftables table
   if command -v nft >/dev/null 2>&1; then
+    nft delete table inet piso_portal 2>/dev/null || true
     nft delete table inet piso 2>/dev/null || true
   fi
   rm -f /etc/nftables.d/openpiso-gateway.nft
@@ -205,6 +206,8 @@ interface=${LAN_IFACE}
 bind-dynamic
 domain-needed
 bogus-priv
+filter-AAAA
+dhcp-authoritative
 
 # DHCP IP Pool (10.0.0.10 -> 10.0.3.250)
 dhcp-range=${DHCP_RANGE}
@@ -250,10 +253,13 @@ if [ "$DRY_RUN" = false ]; then
   cat <<EOF > "$NFT_FILE"
 #!/usr/sbin/nft -f
 # ==============================================================================
-# OpenPisoWiFi inet piso firewall table
+# OpenPisoWiFi inet piso_portal firewall table
 # ==============================================================================
 
-table inet piso {
+table inet piso_portal
+delete table inet piso_portal
+
+table inet piso_portal {
   # Authorized Client MAC Addresses with dynamic kernel timeouts
   set piso_auth {
     type ether_addr
@@ -283,12 +289,13 @@ table inet piso {
     # Drop blacklisted clients immediately
     ether saddr @piso_blacklist drop
 
-    # Allow essential network services from LAN
-    iif "${LAN_IFACE}" udp dport { 53, 67 } accept
-    iif "${LAN_IFACE}" tcp dport 53 accept
+    # Allow DHCP and rate-limited DNS from LAN
+    iif "${LAN_IFACE}" udp dport 67 accept
+    iif "${LAN_IFACE}" udp dport 53 limit rate 20/second burst 40 packets accept
+    iif "${LAN_IFACE}" tcp dport 53 limit rate 20/second burst 40 packets accept
 
-    # Allow captive portal web traffic
-    iif "${LAN_IFACE}" tcp dport { 80, ${PORTAL_PORT}, 4000 } accept
+    # Allow HTTP (80, daemon proxy) and satellite API (4000, daemon-authenticated); never expose :3000 directly
+    iif "${LAN_IFACE}" tcp dport { 80, 4000 } accept
 
     # Allow SSH on management (or restrict as needed)
     tcp dport 22 accept
@@ -298,17 +305,20 @@ table inet piso {
   chain forward {
     type filter hook forward priority filter; policy drop;
 
-    # Allow established and related traffic
-    ct state established,related accept
-
-    # Drop blacklisted devices
+    # Drop blacklisted devices FIRST (before ct state established,related!)
     ether saddr @piso_blacklist drop
+
+    # Allow WAN return traffic only (LAN outbound must re-match @piso_whitelist or @piso_auth)
+    iif "${WAN_IFACE}" ct state established,related accept
 
     # Allow whitelisted devices without payment
     ether saddr @piso_whitelist accept
 
     # Allow paid authorized customers
     iif "${LAN_IFACE}" oif "${WAN_IFACE}" ether saddr @piso_auth accept
+
+    # Fast TCP RST for unauthorized connections before default drop
+    meta l4proto tcp reject with tcp reset
   }
 
   # Network Address Translation (NAT) & Captive Redirection
@@ -319,8 +329,12 @@ table inet piso {
     ether saddr @piso_whitelist return
     ether saddr @piso_auth return
 
-    # Intercept HTTP Port 80 from unauthorized clients and redirect to captive portal
-    iif "${LAN_IFACE}" tcp dport 80 redirect to :${PORTAL_PORT}
+    # Force unauthorized DNS queries to local dnsmasq (prevents DNS tunneling)
+    iif "${LAN_IFACE}" ip daddr != ${LAN_IP} udp dport 53 redirect to :53
+    iif "${LAN_IFACE}" ip daddr != ${LAN_IP} tcp dport 53 redirect to :53
+
+    # Intercept HTTP Port 80 from unauthorized clients -> local port 80 daemon reverse proxy
+    iif "${LAN_IFACE}" tcp dport 80 redirect to :80
   }
 
   # Masquerade outbound traffic to ISP WAN
@@ -331,6 +345,8 @@ table inet piso {
 }
 EOF
 
+  nft delete table inet piso 2>/dev/null || true
+  nft delete table inet piso_portal 2>/dev/null || true
   nft -f "$NFT_FILE"
 
   # Ensure nftables starts on system boot

@@ -115,63 +115,67 @@ DEFAULT_SSH_USER="root"
 DEFAULT_SSH_PORT="22"
 DEFAULT_ROUTER_MODE="fw4_nftables"
 DEFAULT_COIN_PIN="4"
+DEFAULT_INHIBIT_PIN="17"
+EXISTING_DAEMON_API_SECRET=""
+EXISTING_SATELLITE_SECRET=""
+EXISTING_SHIELD_SECRET=""
 
 PORTAL_DIR="$ROOT_DIR/portal"
 [ ! -d "$PORTAL_DIR" ] && [ -d "$ROOT_DIR/pisowifi-portal" ] && PORTAL_DIR="$ROOT_DIR/pisowifi-portal"
 DAEMON_DIR="$ROOT_DIR/daemon"
 [ ! -d "$DAEMON_DIR" ] && [ -d "$ROOT_DIR/pisowifi-daemon" ] && DAEMON_DIR="$ROOT_DIR/pisowifi-daemon"
 
-if [ -f "$PORTAL_DIR/.env" ]; then
-    VAL=$(grep -E '^PORTAL_IP=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_IP="$VAL"
-    VAL=$(grep -E '^ROUTER_IP=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ROUTER_IP="$VAL"
-    VAL=$(grep -E '^PORTAL_DOMAIN=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_DOMAIN="$VAL"
-    VAL=$(grep -E '^PORTAL_PORT=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_PORT="$VAL"
-    VAL=$(grep -E '^ADMIN_PIN=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ADMIN_PIN="$VAL"
-    VAL=$(grep -E '^GITHUB_TOKEN=' "$PORTAL_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && [ -z "$GITHUB_TOKEN" ] && GITHUB_TOKEN="$VAL"
-elif [ -f "$ROOT_DIR/pisowifi-portal/.env" ]; then
-    VAL=$(grep -E '^PORTAL_IP=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_IP="$VAL"
-    VAL=$(grep -E '^ROUTER_IP=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ROUTER_IP="$VAL"
-    VAL=$(grep -E '^PORTAL_DOMAIN=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_DOMAIN="$VAL"
-    VAL=$(grep -E '^PORTAL_PORT=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_PORTAL_PORT="$VAL"
-    VAL=$(grep -E '^ADMIN_PIN=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ADMIN_PIN="$VAL"
-    VAL=$(grep -E '^GITHUB_TOKEN=' "$ROOT_DIR/pisowifi-portal/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && [ -z "$GITHUB_TOKEN" ] && GITHUB_TOKEN="$VAL"
-fi
+read_env_val() {
+    local file="$1"
+    local key="$2"
+    [ -f "$file" ] || return 0
+    grep -E "^${key}=" "$file" 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true
+}
 
-if [ -f "$DAEMON_DIR/.env" ]; then
-    VAL=$(grep -E '^PORT=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_DAEMON_PORT="$VAL"
-    VAL=$(grep -E '^ROUTER_SSH_USER=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_SSH_USER="$VAL"
-    VAL=$(grep -E '^ROUTER_SSH_PORT=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_SSH_PORT="$VAL"
-    VAL=$(grep -E '^ROUTER_MODE=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ROUTER_MODE="$VAL"
-    VAL=$(grep -E '^COIN_GPIO_PIN=' "$DAEMON_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_COIN_PIN="$VAL"
-elif [ -f "$ROOT_DIR/pisowifi-daemon/.env" ]; then
-    VAL=$(grep -E '^PORT=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_DAEMON_PORT="$VAL"
-    VAL=$(grep -E '^ROUTER_SSH_USER=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_SSH_USER="$VAL"
-    VAL=$(grep -E '^ROUTER_SSH_PORT=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_SSH_PORT="$VAL"
-    VAL=$(grep -E '^ROUTER_MODE=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_ROUTER_MODE="$VAL"
-    VAL=$(grep -E '^COIN_GPIO_PIN=' "$ROOT_DIR/pisowifi-daemon/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
-    [ -n "$VAL" ] && DEFAULT_COIN_PIN="$VAL"
-fi
+for env_file in "$PORTAL_DIR/.env" "$ROOT_DIR/pisowifi-portal/.env"; do
+    if [ -f "$env_file" ]; then
+        VAL=$(read_env_val "$env_file" "PORTAL_IP")
+        [ -n "$VAL" ] && DEFAULT_PORTAL_IP="$VAL"
+        VAL=$(read_env_val "$env_file" "ROUTER_IP")
+        [ -n "$VAL" ] && DEFAULT_ROUTER_IP="$VAL"
+        VAL=$(read_env_val "$env_file" "PORTAL_DOMAIN")
+        [ -n "$VAL" ] && DEFAULT_PORTAL_DOMAIN="$VAL"
+        VAL=$(read_env_val "$env_file" "PORTAL_PORT")
+        [ -n "$VAL" ] && DEFAULT_PORTAL_PORT="$VAL"
+        VAL=$(read_env_val "$env_file" "ADMIN_PIN")
+        [ -n "$VAL" ] && DEFAULT_ADMIN_PIN="$VAL"
+        VAL=$(read_env_val "$env_file" "GITHUB_TOKEN")
+        [ -n "$VAL" ] && [ -z "$GITHUB_TOKEN" ] && GITHUB_TOKEN="$VAL"
+        VAL=$(read_env_val "$env_file" "DAEMON_API_SECRET")
+        [ -n "$VAL" ] && [ -z "$EXISTING_DAEMON_API_SECRET" ] && EXISTING_DAEMON_API_SECRET="$VAL"
+        break
+    fi
+done
+
+for env_file in "$DAEMON_DIR/.env" "$ROOT_DIR/pisowifi-daemon/.env"; do
+    if [ -f "$env_file" ]; then
+        VAL=$(read_env_val "$env_file" "PORT")
+        [ -n "$VAL" ] && DEFAULT_DAEMON_PORT="$VAL"
+        VAL=$(read_env_val "$env_file" "ROUTER_SSH_USER")
+        [ -n "$VAL" ] && DEFAULT_SSH_USER="$VAL"
+        VAL=$(read_env_val "$env_file" "ROUTER_SSH_PORT")
+        [ -n "$VAL" ] && DEFAULT_SSH_PORT="$VAL"
+        VAL=$(read_env_val "$env_file" "ROUTER_MODE")
+        [ -n "$VAL" ] && DEFAULT_ROUTER_MODE="$VAL"
+        VAL=$(read_env_val "$env_file" "COIN_GPIO_PIN")
+        [ -n "$VAL" ] && DEFAULT_COIN_PIN="$VAL"
+        VAL=$(read_env_val "$env_file" "INHIBIT_GPIO_PIN")
+        [ -n "$VAL" ] && DEFAULT_INHIBIT_PIN="$VAL"
+        VAL=$(read_env_val "$env_file" "DAEMON_API_SECRET")
+        [ -n "$VAL" ] && [ -z "$EXISTING_DAEMON_API_SECRET" ] && EXISTING_DAEMON_API_SECRET="$VAL"
+        VAL=$(read_env_val "$env_file" "SATELLITE_SECRET")
+        [ -z "$VAL" ] && VAL=$(read_env_val "$env_file" "SLOT_SECRET")
+        [ -n "$VAL" ] && [ -z "$EXISTING_SATELLITE_SECRET" ] && EXISTING_SATELLITE_SECRET="$VAL"
+        VAL=$(read_env_val "$env_file" "SHIELD_SECRET")
+        [ -n "$VAL" ] && [ -z "$EXISTING_SHIELD_SECRET" ] && EXISTING_SHIELD_SECRET="$VAL"
+        break
+    fi
+done
 
 [ -n "$CLI_PORTAL_IP" ] && DEFAULT_PORTAL_IP="$CLI_PORTAL_IP"
 [ -n "$CLI_ROUTER_IP" ] && DEFAULT_ROUTER_IP="$CLI_ROUTER_IP"
@@ -195,6 +199,7 @@ ROUTER_SSH_USER="$DEFAULT_SSH_USER"
 ROUTER_SSH_PORT="$DEFAULT_SSH_PORT"
 ROUTER_MODE="$DEFAULT_ROUTER_MODE"
 COIN_GPIO_PIN="$DEFAULT_COIN_PIN"
+INHIBIT_GPIO_PIN="$DEFAULT_INHIBIT_PIN"
 
 # ------------------------------------------------------------------------------
 # INTERACTIVE TERMINAL DETECTION & INPUT HELPERS
@@ -344,8 +349,9 @@ if [ "$IS_INTERACTIVE" = true ]; then
     # Section C: Hardware Daemon & Coin Acceptor
     echo ""
     echo -e "${PURPLE}[C] Hardware Daemon & Coin Acceptor Settings${NC}"
-    echo -e "  💡 Tip: Coin slot GPIO pin can also be changed anytime in Admin Dashboard Settings."
-    ask_prompt "  • Coin Slot Physical GPIO (can change in admin) [$DEFAULT_COIN_PIN]: " "$DEFAULT_COIN_PIN" COIN_GPIO_PIN
+    echo -e "  💡 Tip: Coin slot BCM GPIO pins can also be changed anytime in Admin Dashboard Settings."
+    ask_prompt "  • Coin Slot BCM GPIO (4 = Physical Pin 7) [$DEFAULT_COIN_PIN]: " "$DEFAULT_COIN_PIN" COIN_GPIO_PIN
+    ask_prompt "  • Inhibit BCM GPIO (17 = Physical Pin 11) [$DEFAULT_INHIBIT_PIN]: " "$DEFAULT_INHIBIT_PIN" INHIBIT_GPIO_PIN
 
     # Section D: Advanced Service Settings
     echo ""
@@ -394,7 +400,7 @@ fi
 echo -e "• Raspberry Pi LAN IP: ${YELLOW}${PORTAL_IP}:${PORTAL_PORT}${NC}"
 echo -e "• OpenWrt Router:      ${YELLOW}${ROUTER_SSH_USER}@${ROUTER_IP}:${ROUTER_SSH_PORT} (${ROUTER_MODE})${NC}"
 echo -e "• Admin Security PIN:  ${YELLOW}${ADMIN_PIN}${NC}"
-echo -e "• Coin Slot GPIO:      ${YELLOW}GPIO ${COIN_GPIO_PIN}${NC} (changeable in Admin)"
+echo -e "• Coin Slot BCM GPIO:  ${YELLOW}BCM ${COIN_GPIO_PIN} / Inhibit BCM ${INHIBIT_GPIO_PIN}${NC} (changeable in Admin)"
 echo -e "• Daemon Port:         ${YELLOW}${DAEMON_PORT}${NC}"
 echo ""
 
@@ -584,6 +590,47 @@ fi
 echo ""
 echo -e "${PURPLE}[4/6] Configuring environment & initializing SQLite database...${NC}"
 
+# Generate or preserve 32-byte random hex security secrets
+is_placeholder_secret() {
+    local val="$1"
+    [ -z "$val" ] && return 0
+    case "$val" in
+        change-me*|openpiso-satellite-secret-2024|changeme|placeholder|secret|your-*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+generate_hex_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    elif command -v node >/dev/null 2>&1; then
+        node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+    else
+        od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+    fi
+}
+
+DAEMON_API_SECRET="$EXISTING_DAEMON_API_SECRET"
+if is_placeholder_secret "$DAEMON_API_SECRET"; then
+    DAEMON_API_SECRET=$(generate_hex_secret)
+fi
+
+SATELLITE_SECRET="$EXISTING_SATELLITE_SECRET"
+if is_placeholder_secret "$SATELLITE_SECRET"; then
+    SATELLITE_SECRET=$(generate_hex_secret)
+fi
+
+SHIELD_SECRET="$EXISTING_SHIELD_SECRET"
+if is_placeholder_secret "$SHIELD_SECRET"; then
+    SHIELD_SECRET=$(generate_hex_secret)
+fi
+
+# Re-resolve target directories in case pre-built bundle created pisowifi-* or portal/daemon
+[ -d "$ROOT_DIR/pisowifi-portal" ] && [ ! -d "$ROOT_DIR/portal" ] && PORTAL_DIR="$ROOT_DIR/pisowifi-portal"
+[ -d "$ROOT_DIR/pisowifi-daemon" ] && [ ! -d "$ROOT_DIR/daemon" ] && DAEMON_DIR="$ROOT_DIR/pisowifi-daemon"
+
 # Write Portal .env
 mkdir -p "$PORTAL_DIR"
 echo -e "--> Writing portal/.env configuration..."
@@ -595,6 +642,7 @@ PORTAL_IP="${PORTAL_IP}"
 PORTAL_PORT="${PORTAL_PORT}"
 ROUTER_IP="${ROUTER_IP}"
 DAEMON_URL="http://127.0.0.1:${DAEMON_PORT}"
+DAEMON_API_SECRET="${DAEMON_API_SECRET}"
 ADMIN_PIN="${ADMIN_PIN}"
 GITHUB_TOKEN="${GITHUB_TOKEN}"
 EOF
@@ -614,6 +662,11 @@ ROUTER_SSH_USER=${ROUTER_SSH_USER}
 ROUTER_SSH_KEY_PATH=/root/.ssh/id_rsa
 ROUTER_MODE=${ROUTER_MODE}
 COIN_GPIO_PIN=${COIN_GPIO_PIN}
+INHIBIT_GPIO_PIN=${INHIBIT_GPIO_PIN}
+INHIBIT_ACTIVE_HIGH=true
+DAEMON_API_SECRET=${DAEMON_API_SECRET}
+SATELLITE_SECRET=${SATELLITE_SECRET}
+SHIELD_SECRET=${SHIELD_SECRET}
 EOF
 
 if [ -n "$GITHUB_TOKEN" ]; then
@@ -636,8 +689,9 @@ fi
 
 # Ensure correct ownership and read/write permissions for web portal and SQLite
 sudo chown -R ${CURRENT_USER}:${CURRENT_USER} "$PORTAL_DIR"
-sudo chmod 777 "$PORTAL_DIR/prisma" 2>/dev/null || true
-sudo chmod 666 "$PORTAL_DIR/prisma/dev.db"* 2>/dev/null || true
+sudo chmod 600 "$PORTAL_DIR/.env" "$DAEMON_DIR/.env" 2>/dev/null || true
+sudo chmod 775 "$PORTAL_DIR/prisma" 2>/dev/null || true
+sudo chmod 660 "$PORTAL_DIR/prisma/dev.db"* 2>/dev/null || true
 
 # Install minimal production daemon dependencies (only 3 packages for hardware GPIO & SSH: express, onoff, ssh2)
 echo -e "--> Verifying Hardware Daemon production dependencies in ${DAEMON_DIR}..."
@@ -683,15 +737,15 @@ fi
 echo ""
 echo -e "${PURPLE}[6/6] Configuring background systemd services & permissions...${NC}"
 
-# Passwordless sudo for service manager and updater
+# Passwordless sudo for service manager and updater (least-privilege fixed commands only)
 sudo mkdir -p /etc/sudoers.d
 sudo tee /etc/sudoers.d/openpisowifi > /dev/null << EOF
-# OpenPisoWifi permissions for service management & OTA updates
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/systemd-run, /usr/bin/systemd-run, /sbin/iptables, /usr/sbin/iptables, /bin/chown, /usr/bin/chown, /bin/chmod, /usr/bin/chmod, /bin/true, /usr/bin/true, /bin/sed, /usr/bin/sed, /sbin/reboot, /usr/sbin/reboot, /bin/reboot, /usr/bin/reboot, ${ROOT_DIR}/scripts/update.sh, /bin/bash ${ROOT_DIR}/scripts/update.sh, /usr/bin/bash ${ROOT_DIR}/scripts/update.sh
+# OpenPisoWifi least-privilege permissions for service management & OTA updates
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart pisowifi-portal.service, /usr/bin/systemctl restart pisowifi-portal.service, /bin/systemctl restart pisowifi-daemon.service, /usr/bin/systemctl restart pisowifi-daemon.service, /bin/systemctl daemon-reload, /usr/bin/systemctl daemon-reload, /sbin/reboot, /usr/sbin/reboot, ${ROOT_DIR}/scripts/update.sh, /bin/bash ${ROOT_DIR}/scripts/update.sh, /usr/bin/bash ${ROOT_DIR}/scripts/update.sh
 EOF
 sudo chmod 0440 /etc/sudoers.d/openpisowifi
 
-# 1. Daemon Service (Runs bundled JavaScript directly with Node.js and EnvironmentFile)
+# 1. Daemon Service (Runs bundled JavaScript directly with Node.js, binds Port 80 HMAC reverse proxy)
 sudo tee /etc/systemd/system/pisowifi-daemon.service > /dev/null << EOF
 [Unit]
 Description=OpenPisoWiFi Hardware Daemon & Router Controller
@@ -702,10 +756,6 @@ Type=simple
 User=root
 WorkingDirectory=${DAEMON_DIR}
 EnvironmentFile=-${DAEMON_DIR}/.env
-ExecStartPre=-/sbin/iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${PORTAL_PORT}
-ExecStartPre=-/sbin/iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${PORTAL_PORT}
-ExecStartPre=-/sbin/iptables -t nat -C OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port ${PORTAL_PORT}
-ExecStartPre=-/sbin/iptables -t nat -A OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port ${PORTAL_PORT}
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=3
@@ -714,7 +764,7 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# 2. Portal Service (Runs Next.js Standalone server.js directly with Node.js and EnvironmentFile)
+# 2. Portal Service (Bound to localhost 127.0.0.1 behind Daemon Port 80 HMAC reverse proxy)
 sudo tee /etc/systemd/system/pisowifi-portal.service > /dev/null << EOF
 [Unit]
 Description=OpenPisoWiFi Next.js Captive Portal
@@ -729,14 +779,22 @@ ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=${PORTAL_PORT}
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Port 80 to Portal Port redirection on Raspberry Pi
-sudo iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${PORTAL_PORT} 2>/dev/null || sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${PORTAL_PORT} || true
-sudo iptables -t nat -C OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port ${PORTAL_PORT} 2>/dev/null || sudo iptables -t nat -A OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port ${PORTAL_PORT} || true
+# Clean up any legacy iptables port 80 -> 3000 REDIRECT rules so Daemon port80Server handles port 80
+for RPORT in "${PORTAL_PORT}" 3000; do
+    while sudo iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null; do
+        sudo iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null || break
+    done
+    while sudo iptables -t nat -C OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null; do
+        sudo iptables -t nat -D OUTPUT -p tcp -o lo --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null || break
+    done
+done
 
 if command -v netfilter-persistent >/dev/null 2>&1; then
     sudo netfilter-persistent save 2>/dev/null || true
@@ -756,13 +814,13 @@ echo ""
 echo -e "${CYAN}==============================================================${NC}"
 echo -e "${GREEN}🎉 OpenPisoWifi Installation Completed Successfully!${NC}"
 echo -e "${CYAN}==============================================================${NC}"
-echo -e "• Hardware Daemon Service: [ ${GREEN}${DAEMON_STATUS}${NC} ] (Port ${DAEMON_PORT})"
-echo -e "• Web Portal Service:      [ ${GREEN}${PORTAL_STATUS}${NC} ] (Port ${PORTAL_PORT})"
+echo -e "• Hardware Daemon Service: [ ${GREEN}${DAEMON_STATUS}${NC} ] (Port ${DAEMON_PORT}, Port 80 Proxy)"
+echo -e "• Web Portal Service:      [ ${GREEN}${PORTAL_STATUS}${NC} ] (127.0.0.1:${PORTAL_PORT})"
 echo ""
 echo -e "🌐 Access URLs:"
 echo -e "  • Local Domain:     ${CYAN}http://${PORTAL_DOMAIN}/${NC}"
 echo -e "  • Mobile Shortcut:  ${CYAN}http://10.0.0.1/${NC} (Fast mobile typing)"
-echo -e "  • Direct IP Portal: ${CYAN}http://${PORTAL_IP}:${PORTAL_PORT}/${NC}"
+echo -e "  • Direct IP Portal: ${CYAN}http://${PORTAL_IP}/${NC}"
 echo -e "  • Admin Dashboard:  ${CYAN}http://${PORTAL_DOMAIN}/admin${NC} (PIN: ${YELLOW}${ADMIN_PIN}${NC})"
 echo ""
 echo -e "📡 Router Deployment Next Step:"

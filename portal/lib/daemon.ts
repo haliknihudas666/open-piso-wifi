@@ -1,5 +1,14 @@
 const DAEMON_URL = process.env.DAEMON_URL || 'http://127.0.0.1:4000';
 
+export function daemonHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra || {}) };
+  const secret = process.env.DAEMON_API_SECRET?.trim();
+  if (secret) {
+    headers['x-daemon-secret'] = secret;
+  }
+  return headers;
+}
+
 export interface CoinResponse {
   pulses: number;
 }
@@ -23,17 +32,74 @@ export interface RouterStatusResponse {
   error?: string;
 }
 
-// In-memory simulated coin tracker for development when hardware daemon is not active
+export interface DaemonGpioConfig {
+  coinBcm: number;
+  inhibitBcm: number;
+  buttonBcm?: number;
+  inhibitActiveHigh?: boolean;
+  gpioBackend?: string;
+  boardProfile?: string;
+  pulseMultiplier?: number;
+  serialPort?: string;
+}
+
+export interface ShieldAlert {
+  id?: string;
+  timestamp: number;
+  type: string;
+  severity: 'high' | 'medium' | 'low';
+  band?: string;
+  ssid?: string;
+  bssid?: string;
+  mac?: string;
+  count?: number;
+  message: string;
+}
+
+export interface DaemonShieldStatus {
+  stormShieldActive: boolean;
+  stormShieldRemainingSec: number;
+  alerts: ShieldAlert[];
+  counts: {
+    deauthStorms: number;
+    evilTwins: number;
+    coinTampers: number;
+    total: number;
+  };
+  routerCapabilities: {
+    oweSupported: boolean;
+    widsRunning: boolean;
+    clientIsolation: boolean;
+    antiTethering: boolean;
+    iotSsid?: string;
+  };
+}
+
+// In-memory simulated coin tracker for development ONLY when hardware daemon is not active
 let simulatedPendingCoins = 0;
+const simulatedSlotPendingCoins = new Map<string, number>();
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === 'production';
+}
 
 /**
- * Fetches current pending coin pulses from hardware daemon (port 4000) or local simulator.
- * 1 pulse = 1 peso. Supports optional slotId for multi-coinslot setups.
+ * Fetches current pending coin pulses from hardware daemon (port 4000) or dev simulator.
+ * Supports optional slotId for multi-coinslot setups.
  */
-export async function getDaemonCoins(slotId?: string): Promise<{ pulses: number; daemonOnline: boolean; coinSlotEnabled: boolean; isWanOnline: boolean; slotId?: string }> {
+export async function getDaemonCoins(slotId?: string): Promise<{
+  pulses: number;
+  daemonOnline: boolean;
+  coinSlotEnabled: boolean;
+  isWanOnline: boolean;
+  slotId?: string;
+}> {
   try {
-    const url = slotId ? `${DAEMON_URL}/api/coins?slotId=${encodeURIComponent(slotId)}` : `${DAEMON_URL}/api/coins`;
+    const url = slotId
+      ? `${DAEMON_URL}/api/coins?slotId=${encodeURIComponent(slotId)}`
+      : `${DAEMON_URL}/api/coins`;
     const res = await fetch(url, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(1500),
     });
@@ -42,26 +108,121 @@ export async function getDaemonCoins(slotId?: string): Promise<{ pulses: number;
       throw new Error(`Daemon returned status ${res.status}`);
     }
 
-    const data = await res.json() as { pulses?: number; coinSlotEnabled?: boolean; isWanOnline?: boolean; slotId?: string };
+    const data = (await res.json()) as {
+      pulses?: number;
+      coinSlotEnabled?: boolean;
+      isWanOnline?: boolean;
+      slotId?: string;
+    };
     return {
       pulses: data.pulses || 0,
       daemonOnline: true,
       coinSlotEnabled: data.coinSlotEnabled ?? false,
       isWanOnline: data.isWanOnline !== false,
-      slotId: data.slotId,
+      slotId: data.slotId ?? slotId,
     };
   } catch {
-    // If hardware daemon is offline, return simulated balance for development
-    return { pulses: simulatedPendingCoins, daemonOnline: false, coinSlotEnabled: false, isWanOnline: true, slotId };
+    if (isProduction()) {
+      return {
+        pulses: 0,
+        daemonOnline: false,
+        coinSlotEnabled: false,
+        isWanOnline: false,
+        slotId,
+      };
+    }
+    const devPulses = slotId
+      ? simulatedSlotPendingCoins.get(slotId) || 0
+      : simulatedPendingCoins;
+    return {
+      pulses: devPulses,
+      daemonOnline: false,
+      coinSlotEnabled: false,
+      isWanOnline: true,
+      slotId,
+    };
+  }
+}
+
+/**
+ * Atomically claims (reads + zeroes + disables) pending coins on the hardware daemon.
+ */
+export async function claimDaemonCoins(slotId?: string): Promise<{
+  success: boolean;
+  pulses: number;
+  slotId?: string;
+  coinSlotEnabled: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/coins/claim`, {
+      method: 'POST',
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ slotId }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        success: false,
+        pulses: 0,
+        slotId,
+        coinSlotEnabled: false,
+        error: data.error || `Daemon returned status ${res.status}`,
+      };
+    }
+
+    if (slotId) {
+      simulatedSlotPendingCoins.set(slotId, 0);
+    } else {
+      simulatedPendingCoins = 0;
+    }
+
+    return {
+      success: true,
+      pulses: typeof data.pulses === 'number' ? data.pulses : 0,
+      slotId: data.slotId ?? slotId,
+      coinSlotEnabled: data.coinSlotEnabled ?? false,
+    };
+  } catch (err: any) {
+    if (isProduction()) {
+      return {
+        success: false,
+        pulses: 0,
+        slotId,
+        coinSlotEnabled: false,
+        error: err?.message || 'Hardware daemon unreachable',
+      };
+    }
+
+    const claimed = slotId
+      ? simulatedSlotPendingCoins.get(slotId) || 0
+      : simulatedPendingCoins;
+    if (slotId) {
+      simulatedSlotPendingCoins.set(slotId, 0);
+    } else {
+      simulatedPendingCoins = 0;
+    }
+    return {
+      success: true,
+      pulses: claimed,
+      slotId,
+      coinSlotEnabled: false,
+    };
   }
 }
 
 /**
  * Fetches list of all connected ESP32 satellite coinslots.
  */
-export async function getDaemonCoinslots(): Promise<Array<{ id: string; name: string; ip: string; status: string; online: boolean; rssi?: number }>> {
+export async function getDaemonCoinslots(): Promise<
+  Array<{ id: string; name: string; ip: string; status: string; online: boolean; rssi?: number }>
+> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/coinslots`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(2000),
     });
@@ -75,25 +236,45 @@ export async function getDaemonCoinslots(): Promise<Array<{ id: string; name: st
 
 /**
  * Simulates coin pulse insertion (e.g. +1, +5, +10 pesos) for hardware-free testing.
+ * Never falls back to in-memory simulation when NODE_ENV === 'production'.
  */
-export async function simulateDaemonCoins(amount = 1, slotId?: string): Promise<{ pulses: number; success: boolean }> {
+export async function simulateDaemonCoins(
+  amount = 1,
+  slotId?: string
+): Promise<{ pulses: number; success: boolean; error?: string }> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/coins/simulate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ amount, slotId }),
       cache: 'no-store',
       signal: AbortSignal.timeout(1500),
     });
 
+    const data = await res.json().catch(() => ({}));
     if (res.ok) {
-      const data = await res.json();
       return { pulses: data.pulses || 0, success: true };
     }
-  } catch {
-    // Hardware daemon offline: update local simulator state
+    return {
+      pulses: 0,
+      success: false,
+      error: data.error || data.message || `Daemon returned status ${res.status}`,
+    };
+  } catch (err: any) {
+    if (isProduction()) {
+      return {
+        pulses: 0,
+        success: false,
+        error: err?.message || 'Hardware daemon unreachable',
+      };
+    }
   }
 
+  if (slotId) {
+    const next = (simulatedSlotPendingCoins.get(slotId) || 0) + amount;
+    simulatedSlotPendingCoins.set(slotId, next);
+    return { pulses: next, success: true };
+  }
   simulatedPendingCoins += amount;
   return { pulses: simulatedPendingCoins, success: true };
 }
@@ -102,11 +283,16 @@ export async function simulateDaemonCoins(amount = 1, slotId?: string): Promise<
  * Clears pending coin counter on the hardware daemon or simulator.
  */
 export async function clearDaemonCoins(slotId?: string): Promise<boolean> {
-  simulatedPendingCoins = 0;
+  if (slotId) {
+    simulatedSlotPendingCoins.set(slotId, 0);
+  } else {
+    simulatedPendingCoins = 0;
+  }
+
   try {
     const res = await fetch(`${DAEMON_URL}/api/coins/clear`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ slotId }),
       cache: 'no-store',
       signal: AbortSignal.timeout(1500),
@@ -114,19 +300,29 @@ export async function clearDaemonCoins(slotId?: string): Promise<boolean> {
 
     return res.ok;
   } catch {
-    return true; // Cleared in simulated memory
+    return !isProduction();
   }
 }
 
 /**
- * Enables the coin slot on the hardware daemon (inhibit pin → LOW or unlocks remote ESP32).
- * Customer must press "Insert Coin" first before coins are accepted.
+ * Enables the coin slot on the hardware daemon.
+ * Never returns success: true in production if daemon fails or rejects.
  */
-export async function enableDaemonCoinSlot(force = false, slotId?: string, timeoutSeconds?: number): Promise<{ success: boolean; coinSlotEnabled: boolean; isWanOnline?: boolean; error?: string; message?: string }> {
+export async function enableDaemonCoinSlot(
+  force = false,
+  slotId?: string,
+  timeoutSeconds?: number
+): Promise<{
+  success: boolean;
+  coinSlotEnabled: boolean;
+  isWanOnline?: boolean;
+  error?: string;
+  message?: string;
+}> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/coins/enable`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ force, slotId, timeoutSeconds }),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
@@ -143,19 +339,29 @@ export async function enableDaemonCoinSlot(force = false, slotId?: string, timeo
       message: data.message || 'Could not enable coin slot.',
     };
   } catch {
-    // Simulation fallback: pretend enabled in dev if daemon is offline
+    if (isProduction()) {
+      return {
+        success: false,
+        coinSlotEnabled: false,
+        isWanOnline: false,
+        error: 'DAEMON_UNREACHABLE',
+        message: 'Hardware daemon unreachable.',
+      };
+    }
     return { success: true, coinSlotEnabled: true, isWanOnline: true };
   }
 }
 
 /**
- * Disables the coin slot on the hardware daemon (inhibit pin → HIGH or locks remote ESP32).
+ * Disables the coin slot on the hardware daemon.
  */
-export async function disableDaemonCoinSlot(slotId?: string): Promise<{ success: boolean; coinSlotEnabled: boolean }> {
+export async function disableDaemonCoinSlot(
+  slotId?: string
+): Promise<{ success: boolean; coinSlotEnabled: boolean }> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/coins/disable`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ slotId }),
       cache: 'no-store',
       signal: AbortSignal.timeout(2000),
@@ -164,42 +370,76 @@ export async function disableDaemonCoinSlot(slotId?: string): Promise<{ success:
       const data = await res.json();
       return { success: true, coinSlotEnabled: data.coinSlotEnabled ?? false };
     }
+    return { success: false, coinSlotEnabled: false };
   } catch {}
-  return { success: true, coinSlotEnabled: false };
+  return { success: !isProduction(), coinSlotEnabled: false };
 }
 
 /**
- * Hot-reloads GPIO pin assignments on the daemon without a restart.
- * Uses BCM (Broadcom) GPIO numbers as required by the onoff package.
+ * Hot-reloads canonical BCM GPIO pin assignments and backend profile on the daemon.
  */
 export async function setDaemonGpioConfig(
-  coinBcm: number,
-  inhibitBcm: number,
-  inhibitActiveHigh: boolean = true
-): Promise<{ success: boolean; coinBcm: number; inhibitBcm: number; inhibitActiveHigh?: boolean }> {
+  config: DaemonGpioConfig
+): Promise<{
+  success: boolean;
+  coinBcm: number;
+  inhibitBcm: number;
+  buttonBcm?: number;
+  inhibitActiveHigh?: boolean;
+  gpioBackend?: string;
+  boardProfile?: string;
+  pulseMultiplier?: number;
+}> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/gpio/config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ coinPin: coinBcm, inhibitPin: inhibitBcm, inhibitActiveHigh }),
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        coinBcm: config.coinBcm,
+        inhibitBcm: config.inhibitBcm,
+        buttonBcm: config.buttonBcm,
+        inhibitActiveHigh: config.inhibitActiveHigh,
+        gpioBackend: config.gpioBackend,
+        boardProfile: config.boardProfile,
+        pulseMultiplier: config.pulseMultiplier,
+        serialPort: config.serialPort,
+      }),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
       const data = await res.json();
-      return { success: true, coinBcm: data.coinBcm, inhibitBcm: data.inhibitBcm, inhibitActiveHigh: data.inhibitActiveHigh };
+      return {
+        success: true,
+        coinBcm: data.coinBcm ?? config.coinBcm,
+        inhibitBcm: data.inhibitBcm ?? config.inhibitBcm,
+        buttonBcm: data.buttonBcm ?? config.buttonBcm,
+        inhibitActiveHigh: data.inhibitActiveHigh ?? config.inhibitActiveHigh,
+        gpioBackend: data.gpioBackend ?? config.gpioBackend,
+        boardProfile: data.boardProfile ?? config.boardProfile,
+        pulseMultiplier: data.pulseMultiplier ?? config.pulseMultiplier,
+      };
     }
   } catch {}
-  return { success: false, coinBcm, inhibitBcm, inhibitActiveHigh };
+  return {
+    success: false,
+    coinBcm: config.coinBcm,
+    inhibitBcm: config.inhibitBcm,
+    buttonBcm: config.buttonBcm,
+    inhibitActiveHigh: config.inhibitActiveHigh,
+    gpioBackend: config.gpioBackend,
+    boardProfile: config.boardProfile,
+    pulseMultiplier: config.pulseMultiplier,
+  };
 }
 
 /**
  * Fetches the hardware coin debugger data from the daemon.
- * Returns event log, current GPIO state, and per-denomination detection stats.
  */
 export async function getDaemonHardwareDebug(): Promise<any> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/hardware/debug`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(2000),
     });
@@ -212,7 +452,11 @@ export async function getDaemonHardwareDebug(): Promise<any> {
       pendingCoins: 0,
       coinBcm: 4,
       inhibitBcm: 17,
+      buttonBcm: 27,
       inhibitActiveHigh: true,
+      gpioBackend: 'auto',
+      boardProfile: 'rpi',
+      pulseMultiplier: 1,
       gpioAvailable: false,
       lastGpioError: null,
       timeoutSeconds: 90,
@@ -225,7 +469,6 @@ export async function getDaemonHardwareDebug(): Promise<any> {
     },
   };
 }
-
 
 /**
  * Authorizes a client MAC address on OpenWrt router managed by the hardware daemon.
@@ -247,7 +490,7 @@ export async function authorizeClientMac(
   try {
     const res = await fetch(`${DAEMON_URL}/api/authorize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         mac,
         durationMinutes,
@@ -271,8 +514,7 @@ export async function authorizeClientMac(
     return { success: true };
   } catch (error: any) {
     console.error('Hardware daemon /api/authorize error:', error);
-    // In local dev without hardware daemon, mock authorization succeeds
-    if (process.env.NODE_ENV !== 'production') {
+    if (!isProduction()) {
       console.log(`[DEV MODE] Mock Authorized MAC: ${mac} for ${durationMinutes} minutes`);
       return { success: true };
     }
@@ -281,8 +523,7 @@ export async function authorizeClientMac(
 }
 
 /**
- * Deauthorizes a client MAC address on the OpenWrt router, cutting off internet forwarding,
- * flushing conntrack states, and disconnecting the Wi-Fi station.
+ * Deauthorizes a client MAC address on the OpenWrt router.
  */
 export async function deauthorizeClientMac(
   mac: string,
@@ -291,7 +532,7 @@ export async function deauthorizeClientMac(
   try {
     const res = await fetch(`${DAEMON_URL}/api/deauthorize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ mac, kickStation: options?.kickStation }),
       signal: AbortSignal.timeout(5000),
     });
@@ -315,7 +556,7 @@ export async function kickRouterStation(mac: string): Promise<{ success: boolean
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/kick`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ mac }),
       signal: AbortSignal.timeout(5000),
     });
@@ -333,6 +574,7 @@ export async function kickRouterStation(mac: string): Promise<{ success: boolean
 export async function getRouterStatus(): Promise<RouterStatusResponse> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/status`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
     });
@@ -361,7 +603,7 @@ export async function testRouterConnection(config?: any): Promise<{ success: boo
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/test`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(config || {}),
       signal: AbortSignal.timeout(8000),
     });
@@ -378,6 +620,7 @@ export async function testRouterConnection(config?: any): Promise<{ success: boo
 export async function lookupRemoteArp(ip: string): Promise<string | null> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/arp?ip=${encodeURIComponent(ip)}`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(2000),
     });
@@ -416,6 +659,7 @@ export interface RouterTelemetryData {
 export async function getRouterWifiConfig(): Promise<RouterWifiConfig> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/wifi`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
     });
@@ -447,7 +691,7 @@ export async function updateRouterWifiConfig(params: {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/wifi`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(params),
       signal: AbortSignal.timeout(10000),
     });
@@ -466,6 +710,7 @@ export async function rebootOpenWrtRouter(): Promise<{ success: boolean; message
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/reboot`, {
       method: 'POST',
+      headers: daemonHeaders(),
       signal: AbortSignal.timeout(5000),
     });
 
@@ -482,6 +727,7 @@ export async function flushRouterSessions(): Promise<{ success: boolean; error?:
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/flush`, {
       method: 'POST',
+      headers: daemonHeaders(),
       signal: AbortSignal.timeout(5000),
     });
 
@@ -498,6 +744,7 @@ export async function flushRouterSessions(): Promise<{ success: boolean; error?:
 export async function getRouterTelemetry(): Promise<RouterTelemetryData> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/telemetry`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(6000),
     });
@@ -531,7 +778,7 @@ export async function setDaemonWhitelist(
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/whitelist`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         mac,
         action,
@@ -553,11 +800,14 @@ export async function setDaemonWhitelist(
 /**
  * Adds or removes a MAC address from OpenWrt blacklist on the daemon.
  */
-export async function setDaemonBlacklist(mac: string, action: 'add' | 'remove'): Promise<{ success: boolean; error?: string }> {
+export async function setDaemonBlacklist(
+  mac: string,
+  action: 'add' | 'remove'
+): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/blacklist`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ mac, action }),
       signal: AbortSignal.timeout(5000),
     });
@@ -576,7 +826,7 @@ export async function syncDaemonDeviceRules(whitelist: string[], blacklist: stri
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/devices/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ whitelist, blacklist }),
       signal: AbortSignal.timeout(6000),
     });
@@ -596,7 +846,7 @@ export async function syncDaemonSessions(
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ sessions }),
       signal: AbortSignal.timeout(8000),
     });
@@ -610,11 +860,14 @@ export async function syncDaemonSessions(
 /**
  * Configures bandwidth rate limiting (QoS) on OpenWrt router.
  */
-export async function setRouterQoS(downloadMbps: number, uploadMbps: number): Promise<{ success: boolean; error?: string }> {
+export async function setRouterQoS(
+  downloadMbps: number,
+  uploadMbps: number
+): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/qos`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ downloadMbps, uploadMbps }),
       signal: AbortSignal.timeout(5000),
     });
@@ -632,6 +885,7 @@ export async function setRouterQoS(downloadMbps: number, uploadMbps: number): Pr
 export async function getRouterDhcpLeases(): Promise<Array<{ mac: string; ip: string; hostname?: string }>> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/dhcp`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
     });
@@ -666,6 +920,7 @@ export interface RouterConnectedClient {
 export async function getRouterConnectedClients(): Promise<RouterConnectedClient[]> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/clients`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
     });
@@ -681,8 +936,11 @@ export async function getRouterConnectedClients(): Promise<RouterConnectedClient
 
 export interface RouterQoSStatus {
   active: boolean;
+  enabled?: boolean;
   downloadMbps: number;
   uploadMbps: number;
+  downMbps?: number;
+  upMbps?: number;
   lanInterface: string;
   wanInterface: string;
   details: string;
@@ -694,6 +952,7 @@ export interface RouterQoSStatus {
 export async function getRouterQoSStatus(): Promise<RouterQoSStatus> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/qos/status`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
     });
@@ -705,8 +964,11 @@ export async function getRouterQoSStatus(): Promise<RouterQoSStatus> {
 
   return {
     active: false,
+    enabled: false,
     downloadMbps: 0,
     uploadMbps: 0,
+    downMbps: 0,
+    upMbps: 0,
     lanInterface: 'br-lan',
     wanInterface: 'wan',
     details: 'QoS status unavailable',
@@ -725,6 +987,7 @@ export interface RouterDeviceRulesStatus {
 export async function getRouterDeviceRulesStatus(): Promise<RouterDeviceRulesStatus> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/devices/status`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
     });
@@ -757,6 +1020,7 @@ export interface DaemonVersionData {
 export async function getDaemonVersion(): Promise<DaemonVersionData> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/version`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(1500),
     });
@@ -797,7 +1061,7 @@ export async function syncRouterDns(
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/dns`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ domain, portalIp, routerIp }),
       cache: 'no-store',
       signal: AbortSignal.timeout(4000),
@@ -829,6 +1093,7 @@ export async function runRouterSpeedtest(): Promise<{
   try {
     const res = await fetch(`${DAEMON_URL}/api/router/speedtest`, {
       method: 'POST',
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(45000),
     });
@@ -839,5 +1104,144 @@ export async function runRouterSpeedtest(): Promise<{
     return { success: false, error: `Daemon returned status ${res.status}` };
   } catch (err: any) {
     return { success: false, error: err.message || 'Daemon offline' };
+  }
+}
+
+/**
+ * Fetches live OpenPiso Shield status (Storm Shield, WIDS alerts, router capabilities).
+ */
+export async function getDaemonShieldStatus(): Promise<DaemonShieldStatus> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/shield/status`, {
+      headers: daemonHeaders(),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+
+  return {
+    stormShieldActive: false,
+    stormShieldRemainingSec: 0,
+    alerts: [],
+    counts: {
+      deauthStorms: 0,
+      evilTwins: 0,
+      coinTampers: 0,
+      total: 0,
+    },
+    routerCapabilities: {
+      oweSupported: false,
+      widsRunning: false,
+      clientIsolation: false,
+      antiTethering: false,
+    },
+  };
+}
+
+/**
+ * Applies OpenPiso Shield configuration to the daemon & OpenWrt router.
+ */
+export async function applyDaemonShieldConfig(cfg: {
+  shield_owe_mode?: string;
+  shield_client_isolation?: string | boolean;
+  shield_anti_tethering?: string | boolean;
+  shield_storm_shield_enabled?: string | boolean;
+  shield_wids_enabled?: string | boolean;
+  shield_iot_ssid?: string;
+  shield_iot_passphrase?: string;
+}): Promise<{ success: boolean; error?: string; message?: string }> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/shield/config`, {
+      method: 'POST',
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(cfg),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      success: res.ok && data.success !== false,
+      error: data.error,
+      message: data.message,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Daemon unreachable' };
+  }
+}
+
+/**
+ * Clears recorded Shield alerts on the hardware daemon.
+ */
+export async function clearDaemonShieldAlerts(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/shield/clear-alerts`, {
+      method: 'POST',
+      headers: daemonHeaders(),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok && data.success !== false, error: data.error };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Daemon unreachable' };
+  }
+}
+
+/**
+ * Notifies daemon to engage or update Storm Shield freeze window.
+ */
+export async function triggerDaemonStormShield(payload: {
+  durationSeconds?: number;
+  reason?: string;
+  active?: boolean;
+}): Promise<{ success: boolean; stormShieldActive?: boolean; stormShieldRemainingSec?: number; error?: string }> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/shield/storm-trigger`, {
+      method: 'POST',
+      headers: daemonHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      success: res.ok && data.success !== false,
+      stormShieldActive: data.stormShieldActive,
+      stormShieldRemainingSec: data.stormShieldRemainingSec,
+      error: data.error,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Daemon unreachable' };
+  }
+}
+
+/**
+ * Evades localized 2.4GHz jamming/deauth by hopping to a cleaner 2.4GHz Wi-Fi channel.
+ */
+export async function hopDaemonChannel2g(): Promise<{
+  success: boolean;
+  previousChannel?: string;
+  newChannel?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/shield/channel-hop`, {
+      method: 'POST',
+      headers: daemonHeaders(),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      success: res.ok && data.success !== false,
+      previousChannel: data.previousChannel,
+      newChannel: data.newChannel,
+      error: data.error,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Daemon unreachable' };
   }
 }

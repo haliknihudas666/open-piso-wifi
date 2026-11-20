@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isClientAuthenticated } from '@/lib/auth-check';
-import { setDaemonWhitelist, authorizeClientMac, deauthorizeClientMac } from '@/lib/daemon';
+import { setDaemonWhitelist, authorizeClientMac } from '@/lib/daemon';
 import { getPortalRedirectUrl } from '@/lib/portal-url';
+import { getTrustedClientIp } from '@/lib/client-ip';
 
 /**
  * Universal Catch-All Captive Portal Probe Handler
@@ -9,10 +10,7 @@ import { getPortalRedirectUrl } from '@/lib/portal-url';
  * connectivitycheck.gstatic.com, or random browser URL probes when intercepted by OpenWrt redirect).
  */
 export async function GET(request: NextRequest) {
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    '127.0.0.1';
+  const ip = getTrustedClientIp(request);
 
   const host = (request.headers.get('host') || '').toLowerCase();
   const path = request.nextUrl.pathname.toLowerCase();

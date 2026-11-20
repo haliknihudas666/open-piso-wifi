@@ -1,14 +1,17 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
 import { getRouterTelemetry } from '@/lib/daemon';
+import { requireAdmin } from '@/lib/admin-auth';
 
 const execAsync = promisify(exec);
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
   // 1. Raspberry Pi CPU Temperature
   let cpuTempC = 42.5; // Default/mock temp
   try {

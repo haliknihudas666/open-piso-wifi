@@ -73,9 +73,10 @@ export function PortalContent({
     remainingMinutes: 10,
   });
 
-  // Extract potential MAC or IP hints passed from OpenWrt redirect parameters
+  // Extract potential MAC, IP, or satellite coinslot hints passed from OpenWrt redirect or QR links
   const queryMac = searchParams?.get('mac') || searchParams?.get('client_mac') || searchParams?.get('tok') || '';
   const queryIp = searchParams?.get('ip') || '';
+  const slotId = searchParams?.get('slot')?.trim() || undefined;
 
   // Poll current session state with sessionToken persistence
   const { data: sessionData, mutate: mutateSession } = useSWR('/api/session', sessionFetcher, {
@@ -123,16 +124,20 @@ export function PortalContent({
         const targetPort = sessionData?.portalPort || '3000';
         const currentPort = window.location.port;
         const hidePort = targetPort === '80' || currentPort === '' || currentPort === '80';
-        const targetUrl = hidePort ? `http://${targetIp}/` : `http://${targetIp}:${targetPort}/`;
+        const slotSuffix = slotId ? `?slot=${encodeURIComponent(slotId)}` : '';
+        const targetUrl = hidePort
+          ? `http://${targetIp}/${slotSuffix}`
+          : `http://${targetIp}:${targetPort}/${slotSuffix}`;
         if (window.location.href !== targetUrl) {
           window.location.replace(targetUrl);
         }
       }
     }
-  }, [sessionData?.portalIp, sessionData?.portalPort, queryEmbed]);
+  }, [sessionData?.portalIp, sessionData?.portalPort, queryEmbed, slotId]);
 
   // Poll current coins state for active pulses & rate tiers
-  const { data: coinsData, mutate: mutateCoins } = useSWR('/api/coins', defaultFetcher, {
+  const coinsEndpoint = slotId ? `/api/coins?slotId=${encodeURIComponent(slotId)}` : '/api/coins';
+  const { data: coinsData, mutate: mutateCoins } = useSWR(coinsEndpoint, defaultFetcher, {
     refreshInterval: 1000,
   });
 
@@ -192,7 +197,7 @@ export function PortalContent({
       await fetch('/api/coins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'simulate', amount }),
+        body: JSON.stringify({ action: 'simulate', amount, ...(slotId ? { slotId } : {}) }),
       });
       await mutateCoins();
     } catch (err) {
@@ -375,6 +380,7 @@ export function PortalContent({
           onConnectSuccess={handleConnectSuccess}
           isConnected={isAuthenticated}
           macHint={queryMac}
+          slotId={slotId}
           showSimulator={showCoinSimulator}
           simulatedState={isSimActive ? 'active' : isSimCredited ? 'credited' : undefined}
           simulatedPulses={isSimCredited ? 1 : undefined}

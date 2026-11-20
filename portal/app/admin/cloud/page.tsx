@@ -305,8 +305,17 @@ export default function ModernCloudAdminPage() {
               Supabase Project Connection
             </h3>
             <p className="text-xs text-neutral-600 mb-4">
-              Enter your project URL and Anon / Service Role Key. Stored securely in your local browser storage.
+              Enter your project URL and public Anon Key (protected by authenticated Supabase RLS policies). Stored in
+              your browser&apos;s localStorage.
             </p>
+            <div className="mb-4 p-3 rounded-xl bg-[#ff5f57]/20 border-2 border-black text-xs font-bold text-black flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-black" />
+              <span>
+                Security Warning: NEVER put a Supabase <code className="px-1 py-0.5 bg-white border border-black rounded font-mono">service_role</code> key
+                in browser localStorage. Always use your public Anon key paired with authenticated Supabase Row-Level
+                Security (RLS) policies.
+              </span>
+            </div>
             <form onSubmit={saveConfig} className="space-y-4">
               <div>
                 <label className="block text-xs font-black uppercase tracking-wider mb-1">
@@ -323,7 +332,7 @@ export default function ModernCloudAdminPage() {
               </div>
               <div>
                 <label className="block text-xs font-black uppercase tracking-wider mb-1">
-                  Supabase API Key (Anon or Service Role)
+                  Supabase Anon Key (Client-Safe / RLS Protected)
                 </label>
                 <input
                   type="password"

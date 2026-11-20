@@ -10,6 +10,7 @@ import {
   Radio,
   GitBranch,
   Shield,
+  ShieldAlert,
   Cpu,
   ArrowLeft,
   LogOut,
@@ -40,6 +41,7 @@ export type AdminTab =
   | 'branding'
   | 'router'
   | 'devices'
+  | 'security'
   | 'machine'
   | 'system'
   | 'about';
@@ -144,6 +146,11 @@ export function AdminSidebar({
           id: 'devices' as AdminTab,
           label: 'VIP & Blacklist',
           icon: Shield,
+        },
+        {
+          id: 'security' as AdminTab,
+          label: 'OpenPiso Shield',
+          icon: ShieldAlert,
         },
         {
           id: 'branding' as AdminTab,

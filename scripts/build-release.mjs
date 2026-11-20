@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -265,8 +266,24 @@ try {
 const stats = fs.statSync(TARBALL_PATH);
 const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
 
+const SHA256_PATH = `${TARBALL_PATH}.sha256`;
+const hash = crypto.createHash('sha256');
+const fd = fs.openSync(TARBALL_PATH, 'r');
+try {
+  const buf = Buffer.allocUnsafe(1024 * 1024);
+  let bytesRead = 0;
+  while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+    hash.update(buf.subarray(0, bytesRead));
+  }
+} finally {
+  fs.closeSync(fd);
+}
+const tarballSha256 = hash.digest('hex');
+fs.writeFileSync(SHA256_PATH, `${tarballSha256}  ${path.basename(TARBALL_PATH)}\n`);
+
 console.log('\n[6/6] Finalizing Release...');
 console.log(`✓ Archive: ${TARBALL_PATH} (${sizeMb} MB)`);
+console.log(`✓ Checksum: ${SHA256_PATH} (${tarballSha256})`);
 console.log(`✓ Version file: ${path.join(DIST_DIR, 'version.json')}`);
 
 const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);

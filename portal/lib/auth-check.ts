@@ -185,25 +185,16 @@ export async function isClientAuthenticated(
     }
 
     // 4. Session Token Fallback: Auto-migrate session if client MAC rotated or switched bands/SSIDs
-    if (sessionTokenHint && typeof sessionTokenHint === 'string' && sessionTokenHint.trim().length > 5) {
+    // Only accepts high-entropy sessionToken (transferCode requires explicit rate-limited POST /api/connect).
+    if (sessionTokenHint && typeof sessionTokenHint === 'string' && sessionTokenHint.trim().length > 10) {
       const token = sessionTokenHint.trim();
       const tokenSession = await prisma.session.findFirst({
         where: {
           isActive: true,
-          AND: [
-            {
-              OR: [
-                { sessionToken: token },
-                { transferCode: token },
-                { transferCode: token.startsWith('PW-') ? token : `PW-${token}` },
-              ],
-            },
-            {
-              OR: [
-                { isPaused: true },
-                { endTime: { gt: now } },
-              ],
-            },
+          sessionToken: token,
+          OR: [
+            { isPaused: true },
+            { endTime: { gt: now } },
           ],
         },
         orderBy: { updatedAt: 'desc' },
@@ -287,11 +278,7 @@ export async function isClientAuthenticated(
         // Check if session for this token has EXPIRED (no remaining time)
         const expiredTokenSession = await prisma.session.findFirst({
           where: {
-            OR: [
-              { sessionToken: token },
-              { transferCode: token },
-              { transferCode: token.startsWith('PW-') ? token : `PW-${token}` },
-            ],
+            sessionToken: token,
             isActive: true,
             endTime: { lte: now },
           },

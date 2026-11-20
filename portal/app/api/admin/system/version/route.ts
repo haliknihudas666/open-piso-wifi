@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { requireAdmin } from '@/lib/admin-auth';
+import { daemonHeaders } from '@/lib/daemon';
 
 const execAsync = promisify(exec);
 export const dynamic = 'force-dynamic';
@@ -39,7 +41,10 @@ function findRootDir(): string {
   return path.resolve(process.cwd(), '..');
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   const rootDir = findRootDir();
 
   let systemVersion = 'v1.0.0';
@@ -95,6 +100,7 @@ export async function GET() {
   const daemonUrl = process.env.DAEMON_URL || 'http://127.0.0.1:4000';
   try {
     const dRes = await fetch(`${daemonUrl}/api/version`, {
+      headers: daemonHeaders(),
       cache: 'no-store',
       signal: AbortSignal.timeout(1200),
     });
