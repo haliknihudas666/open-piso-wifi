@@ -97,27 +97,39 @@ export function RouterWifiCard({ initialSettings, onSaveSuccess }: RouterWifiCar
     }
   }, [initialSettings]);
 
-  // Handle OpenWrt SSH Test Connection
+  // Handle OpenWrt SSH Test Connection (tests the current form fields via POST /api/admin/router)
   const handleTestRouter = async () => {
     setIsTestingRouter(true);
     setTestResult(null);
     try {
       const startTime = performance.now();
-      const res = await fetch('/api/admin/router', { method: 'GET' });
+      const res = await fetch('/api/admin/router', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: gatewayData.router_ip,
+          port: parseInt(gatewayData.router_ssh_port, 10) || 22,
+          username: gatewayData.router_ssh_user || 'root',
+          privateKeyPath: gatewayData.router_ssh_key_path || '/root/.ssh/id_rsa',
+          mode: gatewayData.router_mode || 'fw4_nftables',
+        }),
+      });
       const latencyMs = Math.round(performance.now() - startTime);
       const data = await res.json();
 
-      if (res.ok && data.connected) {
+      if (res.ok && (data.success || data.online || data.connected)) {
         setTestResult({
           success: true,
-          message: `Connected successfully! Router: ${data.hostname || 'OpenWrt'} · Uptime: ${data.uptime || 'Unknown'}`,
-          latencyMs,
+          message:
+            data.message ||
+            `Connected successfully! Router: ${data.host || gatewayData.router_ip} (${data.mode || gatewayData.router_mode})`,
+          latencyMs: data.latencyMs ?? latencyMs,
         });
       } else {
         setTestResult({
           success: false,
-          message: data.error || 'Could not establish SSH connection to OpenWrt router.',
-          latencyMs,
+          message: data.message || data.error || 'Could not establish SSH connection to OpenWrt router.',
+          latencyMs: data.latencyMs ?? latencyMs,
         });
       }
     } catch (err: any) {
