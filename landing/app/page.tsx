@@ -34,7 +34,7 @@ import {
 
 export default function LandingPage() {
   // --- Dynamic Version State ---
-  const [version, setVersion] = useState('v1.0.0');
+  const [version, setVersion] = useState('v1.1.0');
   const [isLiveVersion, setIsLiveVersion] = useState(false);
   const [versionSource, setVersionSource] = useState('');
 
@@ -194,14 +194,14 @@ export default function LandingPage() {
 
       {/* Top Announcement Bar */}
       <aside aria-label="Announcement" className="bg-black text-[#ffe17c] font-mono text-[11px] sm:text-xs py-1.5 sm:py-2 px-3 sm:px-4 border-b-2 border-black flex flex-wrap items-center justify-center gap-1 sm:gap-2 font-bold tracking-wide text-center">
-        <span>📢</span>
+        <span>🛡️</span>
         <span>
           <strong>{version} RELEASED:</strong>{' '}
-          <span className="hidden sm:inline">Multi-Architecture Support + Free Supabase Cloud Fleet Control &amp; ESP32 Satellites!</span>
-          <span className="sm:hidden">Multi-Arch + Supabase Fleet!</span>
+          <span className="hidden sm:inline">OpenPiso Shield Anti-Deauth (OWE/PMF + WIDS), Hardened Auth &amp; Coin Tamper Defense!</span>
+          <span className="sm:hidden">OpenPiso Shield + Hardened!</span>
         </span>
-        <a href="#architectures" className="underline hover:text-white ml-1 whitespace-nowrap">
-          Builds →
+        <a href="#shield" className="underline hover:text-white ml-1 whitespace-nowrap">
+          Security →
         </a>
       </aside>
 
@@ -235,6 +235,7 @@ export default function LandingPage() {
             <a href="#architectures" className="hover:underline">Architectures</a>
             <a href="#simulator" className="hover:underline">Live Simulator</a>
             <a href="#cloud-fleet" className="hover:underline">Cloud Fleet</a>
+            <a href="#shield" className="hover:underline font-black text-emerald-800">🛡️ Shield</a>
             <a href="#features" className="hover:underline">Features</a>
             <a href="#compare" className="hover:underline">Comparison</a>
             <Link href="/build-guide" className="hover:underline font-black flex items-center gap-1">
@@ -304,6 +305,14 @@ export default function LandingPage() {
                 <span>→</span>
               </a>
               <a
+                href="#shield"
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3.5 py-2.5 bg-emerald-100 neo-border rounded-xl neo-shadow-xs hover:bg-emerald-200 flex items-center justify-between font-black"
+              >
+                <span>🛡️ OpenPiso Shield &amp; Anti-Deauth</span>
+                <span>→</span>
+              </a>
+              <a
                 href="#features"
                 onClick={() => setMobileMenuOpen(false)}
                 className="px-3.5 py-2.5 bg-white neo-border rounded-xl neo-shadow-xs hover:bg-amber-100 flex items-center justify-between"
@@ -368,6 +377,13 @@ export default function LandingPage() {
                 <span>100% FREE &amp; OPEN-SOURCE<span className="hidden sm:inline"> • NO VENDOR LOCK-IN</span></span>
               </div>
               <a
+                href="#shield"
+                className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 bg-emerald-600 text-white neo-border rounded-full neo-shadow-xs text-[10px] sm:text-xs font-black hover:bg-emerald-700 transition-colors"
+              >
+                <Shield className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                <span>OPENPISO SHIELD • ANTI-DEAUTH &amp; WIDS</span>
+              </a>
+              <a
                 href="#contribute"
                 className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 bg-black text-[#ffe17c] neo-border rounded-full neo-shadow-xs text-[10px] sm:text-xs font-black hover:bg-neutral-800 transition-colors"
               >
@@ -384,7 +400,7 @@ export default function LandingPage() {
             </h1>
 
             <p className="text-sm sm:text-xl font-medium text-neutral-800 max-w-xl leading-relaxed">
-              The production-grade, MIT-licensed Piso-WiFi operating system. Built with <strong>Next.js</strong>, <strong>Linux nftables</strong> kernel routing, <strong>ESP32 satellite coinslots</strong>, and free <strong>Supabase</strong> multi-branch fleet control.
+              The production-grade, security-hardened MIT-licensed Piso-WiFi OS. Protected by <strong>OpenPiso Shield</strong> (OWE/802.11w PMF anti-deauth &amp; WIDS), <strong>Linux nftables</strong>, <strong>HMAC/scrypt auth</strong>, and <strong>ESP32 tamper-guarded coinslots</strong>.
             </p>
 
             {/* 1-Click Installer Box */}
@@ -409,7 +425,7 @@ export default function LandingPage() {
                 </button>
               </div>
               <p className="text-[10px] sm:text-[11px] text-neutral-400 font-mono leading-tight">
-                ✓ Auto-configures GPIO coinslot • Installs systemd daemons • Generates local sqlite DB &amp; JWT keys
+                ✓ Auto-configures GPIO coinslot • Installs systemd daemons • Generates per-install HMAC secrets &amp; SHA-256 verified OTA
               </p>
             </div>
 
@@ -894,6 +910,90 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
         </div>
       </section>
 
+      {/* OpenPiso Shield & Multi-Layer Security */}
+      <section id="shield" className="py-16 sm:py-24 px-4 sm:px-8 border-b-2 border-black bg-[#f6f4ea]">
+        <div className="max-w-7xl mx-auto space-y-12">
+
+          <div className="text-center max-w-3xl mx-auto space-y-3">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 text-white neo-border rounded-full text-xs font-black uppercase tracking-wider neo-shadow-xs">
+              <Shield className="w-3.5 h-3.5" />
+              <span>OpenPiso Shield • Hardened By Default</span>
+            </span>
+            <h2 className="text-3xl sm:text-5xl font-black tracking-tight">
+              Built to Defend Your Hotspot &amp; Coinslot
+            </h2>
+            <p className="text-neutral-700 font-medium text-base">
+              Four defense layers protect paying customers from Wi-Fi deauth &amp; Evil Twin attacks, lock down the router firewall, secure admin &amp; API traffic, and stop coinslot pulse tampering.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <div className="bg-white neo-border-2 rounded-2xl p-6 sm:p-7 neo-shadow space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="w-12 h-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center neo-border neo-shadow-xs shrink-0">
+                  <Wifi className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 neo-border rounded-lg text-[11px] font-mono font-black">
+                  OWE + 802.11w PMF + WIDS
+                </span>
+              </div>
+              <h3 className="text-xl font-black">Anti-Deauth &amp; Evil Twin WIDS</h3>
+              <p className="text-sm font-medium text-neutral-700 leading-relaxed">
+                Secures guest Wi-Fi with <strong>Opportunistic Wireless Encryption (OWE)</strong> and mandatory <strong>802.11w Management Frame Protection</strong> (with automatic hostapd capability detection). The background <strong><code>piso-wids</code></strong> sensor watches for deauth storms and rogue Evil Twin BSSIDs, engaging <strong>Storm Shield</strong> to freeze auto-pause and protect active customer timers.
+              </p>
+            </div>
+
+            <div className="bg-white neo-border-2 rounded-2xl p-6 sm:p-7 neo-shadow space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="w-12 h-12 rounded-xl bg-black text-[#ffe17c] flex items-center justify-center neo-border neo-shadow-xs shrink-0">
+                  <Flame className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 bg-amber-100 text-amber-900 neo-border rounded-lg text-[11px] font-mono font-black">
+                  inet piso_portal + piso_shield
+                </span>
+              </div>
+              <h3 className="text-xl font-black">Firewall &amp; Network Lockdown</h3>
+              <p className="text-sm font-medium text-neutral-700 leading-relaxed">
+                Enforces AP client isolation (<code>isolate=1</code>), blocks unauthorized DNS tunneling with <code>dnsmasq</code> rate limiting (20 req/s), shields router LuCI/SSH and daemon ports from guest clients, supports optional <strong>Anti-Tethering</strong> (TTL=1), and hardens OpenWrt Dropbear to key-only SSH.
+              </p>
+            </div>
+
+            <div className="bg-white neo-border-2 rounded-2xl p-6 sm:p-7 neo-shadow space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="w-12 h-12 rounded-xl bg-blue-500 text-white flex items-center justify-center neo-border neo-shadow-xs shrink-0">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 bg-blue-100 text-blue-900 neo-border rounded-lg text-[11px] font-mono font-black">
+                  scrypt + HMAC-SHA256
+                </span>
+              </div>
+              <h3 className="text-xl font-black">Portal, Auth &amp; OTA Supply-Chain</h3>
+              <p className="text-sm font-medium text-neutral-700 leading-relaxed">
+                Next.js binds strictly to <code>127.0.0.1:3000</code> behind the daemon&apos;s HMAC-signed Port 80 proxy (<code>x-proxy-auth</code>). Admin login uses <strong>scrypt</strong> PIN hashing, <code>HttpOnly; SameSite=Strict</code> cookies, login rate limiting, least-privilege <code>sudoers</code>, and <strong>SHA-256</strong> verified OTA updates.
+              </p>
+            </div>
+
+            <div className="bg-white neo-border-2 rounded-2xl p-6 sm:p-7 neo-shadow space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="w-12 h-12 rounded-xl bg-violet-500 text-white flex items-center justify-center neo-border neo-shadow-xs shrink-0">
+                  <Coins className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 bg-violet-100 text-violet-900 neo-border rounded-lg text-[11px] font-mono font-black">
+                  12–400ms Guard + Watchdog
+                </span>
+              </div>
+              <h3 className="text-xl font-black">Hardware &amp; ESP32 Tamper Defense</h3>
+              <p className="text-sm font-medium text-neutral-700 leading-relaxed">
+                Coinslots boot physically <strong>LOCKED</strong> (Inhibit HIGH), reject ESD spikes or stuck-LOW tampering outside <strong>12ms–400ms</strong>, trigger tamper alerts on inhibited pulses, run <code>esp_task_wdt</code> hardware watchdogs, sign ESP32 satellite payloads via <strong>HMAC-SHA256</strong>, and buffer coins in NVS flash across Wi-Fi drops.
+              </p>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
       {/* Feature Bento Grid */}
       <section id="features" className="py-16 sm:py-24 px-4 sm:px-8 border-b-2 border-black bg-white">
         <div className="max-w-7xl mx-auto space-y-12">
@@ -1049,6 +1149,18 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
                   <td className="p-4 sm:p-5 bg-amber-100/50 text-neutral-900 font-black">100% (Local SQLite + LAN tokens)</td>
                   <td className="p-4 sm:p-5 text-neutral-600">100%</td>
                   <td className="p-4 sm:p-5 text-neutral-600">Partial (License verification checks)</td>
+                </tr>
+                <tr className="hover:bg-amber-50">
+                  <td className="p-4 sm:p-5">Deauth &amp; Evil Twin Defense</td>
+                  <td className="p-4 sm:p-5 bg-emerald-100/70 text-emerald-900 font-black">OpenPiso Shield (OWE + 802.11w PMF + WIDS + Storm Shield)</td>
+                  <td className="p-4 sm:p-5 text-rose-600">None (Vulnerable open Wi-Fi)</td>
+                  <td className="p-4 sm:p-5 text-neutral-600">None / Basic AP isolation</td>
+                </tr>
+                <tr className="hover:bg-amber-50">
+                  <td className="p-4 sm:p-5">Portal &amp; Coin Security</td>
+                  <td className="p-4 sm:p-5 bg-emerald-100/70 text-emerald-900 font-black">scrypt + HMAC-SHA256 + 12–400ms Tamper Guard</td>
+                  <td className="p-4 sm:p-5 text-neutral-600">Legacy PHP / No tamper guard</td>
+                  <td className="p-4 sm:p-5 text-neutral-600">Closed-source / Proprietary</td>
                 </tr>
               </tbody>
             </table>
@@ -2066,6 +2178,16 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
 
             <details className="group bg-[#f6f4ea] neo-border rounded-2xl p-5 neo-shadow-xs">
               <summary className="font-black text-base cursor-pointer list-none flex items-center justify-between">
+                <span>How does OpenPisoWiFi protect against Wi-Fi deauth attacks, Evil Twins, and coin tampering?</span>
+                <span className="transition group-open:rotate-180">▼</span>
+              </summary>
+              <p className="mt-3 text-sm text-neutral-700 font-medium leading-relaxed">
+                <strong>OpenPiso Shield</strong> secures 5GHz (and optionally dual-band) guest Wi-Fi with <strong>OWE + 802.11w PMF</strong>, runs <strong><code>piso-wids</code></strong> on OpenWrt to detect deauth storms and Evil Twin APs, and engages <strong>Storm Shield</strong> so active paying users aren&apos;t auto-paused during an attack. On the hardware &amp; portal side, coinslots boot physically inhibited, validate <strong>12ms–400ms</strong> pulse widths, sign ESP32 satellite traffic with <strong>HMAC-SHA256</strong>, hash admin PINs with <strong>scrypt</strong>, and lock guest traffic inside hardened <code>nftables</code>.
+              </p>
+            </details>
+
+            <details className="group bg-[#f6f4ea] neo-border rounded-2xl p-5 neo-shadow-xs">
+              <summary className="font-black text-base cursor-pointer list-none flex items-center justify-between">
                 <span>Is the project open for contributions, testing, and other hardware?</span>
                 <span className="transition group-open:rotate-180">▼</span>
               </summary>
@@ -2097,6 +2219,7 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
             <a href="#architectures" className="hover:text-[#ffe17c]">Architectures</a>
             <a href="#simulator" className="hover:text-[#ffe17c]">Simulator</a>
             <a href="#cloud-fleet" className="hover:text-[#ffe17c]">Cloud Fleet</a>
+            <a href="#shield" className="hover:text-[#ffe17c]">Shield</a>
             <a href="#build-guide" className="hover:text-[#ffe17c]">Build Guide</a>
             <a href="#compare" className="hover:text-[#ffe17c]">Comparison</a>
             <a href="#contribute" className="hover:text-[#ffe17c]">Contribute &amp; Hardware</a>

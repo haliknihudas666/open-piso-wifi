@@ -2,16 +2,17 @@
 
 <div align="center">
 
-![OpenPisoWiFi Banner](https://img.shields.io/badge/System-v1.0.0-blue?style=for-the-badge&logo=raspberrypi&logoColor=white)
-![Portal Version](https://img.shields.io/badge/Portal-v1.0.0-emerald?style=for-the-badge&logo=nextdotjs&logoColor=white)
-![Daemon Version](https://img.shields.io/badge/Daemon-v1.0.0-purple?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![OpenPisoWiFi Banner](https://img.shields.io/badge/System-v1.1.0-blue?style=for-the-badge&logo=raspberrypi&logoColor=white)
+![Portal Version](https://img.shields.io/badge/Portal-v1.1.0-emerald?style=for-the-badge&logo=nextdotjs&logoColor=white)
+![Daemon Version](https://img.shields.io/badge/Daemon-v1.1.0-purple?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![OpenPiso Shield](https://img.shields.io/badge/OpenPiso_Shield-OWE%2FPMF_%2B_WIDS-059669?style=for-the-badge&logo=shield&logoColor=white)
 ![OpenWrt](https://img.shields.io/badge/OpenWrt-25.12.5%20(Stable)-red?style=for-the-badge&logo=openwrt&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 **Next-Generation Full-Stack Piso Wi-Fi Vending System & Captive Paywall**  
-*Powered by **Ruijie RG-EW1200G Pro (OpenWrt Gigabit Router)** + **Raspberry Pi Paywall Controller***
+*Powered by **Ruijie RG-EW1200G Pro (OpenWrt Gigabit Router)** + **Raspberry Pi Paywall Controller** + **OpenPiso Shield***
 
-[Landing Page](https://openpisowifi.nicolei.games) • [Multi-Architecture Guide](docs/MULTI_ARCHITECTURE_GUIDE.md) • [Features](#-key-features) • [Network Architecture](#-network-architecture--addressing-scheme) • [Hardware Wiring](#-hardware-wiring-diagram-raspberry-pi-gpio) • [Installation](#-installation-guide-raspberry-pi--openwrt) • [Admin Portal](#-accessing-the-applications) • [Cloud Fleet](#-cloud-fleet-management-supabase) • [Daemon API](#-hardware-daemon-rest-api-reference)
+[Landing Page](https://openpisowifi.nicolei.games) • [OpenPiso Shield](#-openpiso-shield--security-hardening) • [Multi-Architecture Guide](docs/MULTI_ARCHITECTURE_GUIDE.md) • [Features](#-key-features) • [Network Architecture](#-network-architecture--addressing-scheme) • [Hardware Wiring](#-hardware-wiring-diagram-raspberry-pi-gpio) • [Installation](#-installation-guide-raspberry-pi--openwrt) • [Admin Portal](#-accessing-the-applications) • [Daemon API](#-hardware-daemon-rest-api-reference)
 
 </div>
 
@@ -19,7 +20,7 @@
 
 ## 📖 Overview
 
-**OpenPisoWiFi** is a production-grade, highly responsive open-source Piso Wi-Fi vending machine, captive paywall, and multi-architecture kiosk controller system. It cleanly decouples gigabit routing, dual-band Wi-Fi broadcasting, and kernel-level packet filtering on an **OpenWrt Router** or **Standalone Linux Gateway**, with coin pulse aggregation via an **ESP32 microcontroller bridge** or direct **Raspberry Pi GPIO**, and centralized telemetry backed by free **Supabase Cloud Fleet Management**.
+**OpenPisoWiFi** is a production-grade, security-hardened open-source Piso Wi-Fi vending machine, captive paywall, and multi-architecture kiosk controller system. It cleanly decouples gigabit routing, dual-band Wi-Fi broadcasting (with **OWE & 802.11w PMF** anti-deauth protection), and kernel-level `nftables` packet filtering on an **OpenWrt Router** or **Standalone Linux Gateway**, with tamper-guarded coin pulse aggregation via an **ESP32 microcontroller bridge** or direct **Raspberry Pi / SBC GPIO**, and centralized telemetry backed by free **Supabase Cloud Fleet Management**.
 
 🌐 **Official Website / Landing Page**: [https://openpisowifi.nicolei.games/](https://openpisowifi.nicolei.games/)
 
@@ -444,6 +445,16 @@ The daemon runs on port `4000` and provides a comprehensive REST interface:
 | `GET` | `/api/router/arp?ip=...` | Resolve client MAC from IP address | `{ ip: string, mac: string }` |
 | `GET` | `/api/version` | Daemon version, uptime & GPIO status | `{ version, nodeVersion, platform, gpioAvailable }` |
 
+### OpenPiso Shield & WIDS Security
+| Method | Endpoint | Description | Payload / Response |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/shield/status` | Read Shield state, alerts & router capabilities | `{ settings, live, stormShieldActive, alerts, counts, routerCapabilities }` |
+| `POST` | `/api/shield/config` | Apply OWE/PMF, anti-tethering, or hidden IoT SSID | Body: `{ antiDeauthMode?, antiTethering?, hiddenIotSsid?, ... }` |
+| `POST` | `/api/shield/wids-event` | Receive signed `piso-wids` deauth/evil-twin alert (`X-Shield-Secret`) | Body: `{ type, severity, band?, count?, message }` |
+| `POST` | `/api/shield/storm-trigger` | Manually engage Storm Shield auto-pause freeze | Body: `{ durationSeconds?, reason? }` |
+| `POST` | `/api/shield/channel-hop` | Hop 2.4GHz Wi-Fi channel to evade interference | `{ success: boolean, channel: number }` |
+| `POST` | `/api/shield/clear-alerts` | Clear Shield alerts and optionally reset Storm Shield | Body: `{ resetStormShield?: boolean }` |
+
 ---
 
 ## 🛠 Useful Management & Troubleshooting Commands
@@ -484,6 +495,9 @@ ssh root@192.168.1.1 "iwinfo wlan0 assoclist; iwinfo wlan1 assoclist"
 
 # View active Traffic Control QoS bandwidth limiter queues
 ssh root@192.168.1.1 "tc -s qdisc show dev br-lan"
+
+# View OpenPiso Shield anti-tethering rules & WIDS status
+ssh root@192.168.1.1 "nft list table inet piso_shield 2>/dev/null; /etc/init.d/piso-wids status; logread -e piso-wids | tail -n 20"
 ```
 
 ### Coin & Hardware Testing via CLI (Loopback + `DAEMON_API_SECRET`):
