@@ -363,6 +363,7 @@ export function PortalContent({
         <LoyaltyStreakCard
           loyalty={sessionData?.loyalty}
           sessionCode={sessionData?.sessionCode || sessionData?.transferCode}
+          portalTitle={portalTitle}
         />
       )}
 

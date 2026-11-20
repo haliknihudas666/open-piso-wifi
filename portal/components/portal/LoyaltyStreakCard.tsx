@@ -11,24 +11,29 @@ import {
   Zap,
   Info,
   Trophy,
+  Share2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { formatDuration } from '@/lib/utils';
 import { LoyaltyCustomerStatus, LoyaltyMilestone } from '@/lib/loyalty';
+import { RewindShareModal } from '@/components/shared/RewindShareModal';
 
 interface LoyaltyStreakCardProps {
   loyalty?: LoyaltyCustomerStatus | null;
   sessionCode?: string | null;
+  portalTitle?: string;
   onCodeCopied?: () => void;
 }
 
 export function LoyaltyStreakCard({
   loyalty,
   sessionCode,
+  portalTitle = 'OpenPisoWiFi',
   onCodeCopied,
 }: LoyaltyStreakCardProps) {
   const [copied, setCopied] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [showRewind, setShowRewind] = useState(false);
 
   // If loyalty system is disabled in settings, don't show the card
   if (loyalty && loyalty.enabled === false) {
@@ -227,6 +232,31 @@ export function LoyaltyStreakCard({
           </div>
         </div>
       )}
+
+      {/* Share My Streak Rewind Button */}
+      <button
+        type="button"
+        onClick={() => setShowRewind(true)}
+        className="w-full py-2.5 px-3 rounded-xl border-2 border-black bg-[#ffe17c] hover:bg-[#ffd95e] text-black font-black text-xs uppercase tracking-wider shadow-neo-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer"
+      >
+        <Share2 className="w-3.5 h-3.5" />
+        <span>Share My Streak Rewind</span>
+      </button>
+
+      <RewindShareModal
+        isOpen={showRewind}
+        onClose={() => setShowRewind(false)}
+        mode="customer"
+        data={{
+          portalTitle,
+          currentStreak,
+          highestStreak: loyalty?.highestStreak || currentStreak,
+          totalCredits: loyalty?.totalCredits || 0,
+          totalAmountSpent: loyalty?.totalAmountSpent || 0,
+          totalBonusMinutes: loyalty?.totalBonusMinutes || 0,
+          sessionCode: effectiveCode,
+        }}
+      />
     </div>
   );
 }

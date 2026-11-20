@@ -21,8 +21,10 @@ import {
   Flame,
   Cloud,
   Heart,
+  Share2,
 } from 'lucide-react';
 import { CloudSyncCard } from '@/components/admin/CloudSyncCard';
+import { RewindShareModal } from '@/components/shared/RewindShareModal';
 import { AboutProjectCard } from '@/components/admin/AboutProjectCard';
 import { AdminLoginModal } from '@/components/admin/AdminLoginModal';
 import { AdminSidebar, AdminTab } from '@/components/admin/AdminSidebar';
@@ -126,6 +128,7 @@ export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>('sessions');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const [showRewindModal, setShowRewindModal] = useState(false);
 
   // Check stored auth PIN and sidebar preference
   useEffect(() => {
@@ -278,6 +281,18 @@ export default function AdminPage() {
                 </span>
               </div>
             )}
+
+            {/* Share Operator Rewind Button */}
+            <Button
+              onClick={() => setShowRewindModal(true)}
+              variant="primary"
+              size="sm"
+              className="gap-1.5 px-3 py-1.5"
+              title="Share Operator Rewind Card"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Rewind</span>
+            </Button>
 
             {/* Global Refresh Button */}
             <Button
@@ -493,6 +508,23 @@ export default function AdminPage() {
           </section>
         </div>
       </main>
+
+      <RewindShareModal
+        isOpen={showRewindModal}
+        onClose={() => setShowRewindModal(false)}
+        mode="admin"
+        data={{
+          portalTitle: settingsData?.portal_title || 'OpenPisoWiFi',
+          allTimeRevenue: stats?.allTimeRevenue || 0,
+          todayRevenue: stats?.todayRevenue || 0,
+          allTimeTransactions: stats?.allTimeTransactions || 0,
+          todayTransactions: stats?.todayTransactions || 0,
+          uniqueUsers: stats?.uniqueUsers || 0,
+          activeSessions: stats?.activeSessions || 0,
+          topStreak: stats?.topStreak || 0,
+          speedMbps: stats?.latestSpeedMbps ?? null,
+        }}
+      />
     </div>
   );
 }
