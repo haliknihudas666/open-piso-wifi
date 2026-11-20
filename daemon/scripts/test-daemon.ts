@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import {
   app,
@@ -310,7 +311,10 @@ async function runTests() {
       assert.equal(authVer.status, 200);
       const verJson = (await authVer.json()) as { name: string; version: string };
       assert.equal(verJson.name, 'pisowifi-daemon');
-      assert.equal(verJson.version, 'v1.0.6');
+      const daemonPkg = JSON.parse(
+        fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+      ) as { version: string };
+      assert.equal(verJson.version, `v${daemonPkg.version}`);
 
       // Satellite registration rejects loopback/public/URL-injection IPs
       const badIpRes = await fetch(`${base}/api/coinslots/register`, {
@@ -393,7 +397,7 @@ async function runTests() {
         body: JSON.stringify({ resetStormShield: true }),
       });
     } finally {
-      server.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       satelliteCoinslots.clear();
       resetCoinStateForTest();
       if (prevDaemonSecret === undefined) delete process.env.DAEMON_API_SECRET;
