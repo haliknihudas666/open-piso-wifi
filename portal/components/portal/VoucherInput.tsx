@@ -5,6 +5,7 @@ import { Ticket, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface VoucherInputProps {
   onRedeemSuccess: (data: any) => void;
@@ -13,6 +14,7 @@ interface VoucherInputProps {
 }
 
 export function VoucherInput({ onRedeemSuccess, isConnected = false, macHint }: VoucherInputProps) {
+  const { t } = usePortalLanguage();
   const [voucherCode, setVoucherCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -68,16 +70,16 @@ export function VoucherInput({ onRedeemSuccess, isConnected = false, macHint }: 
         </div>
         <div>
           <h2 className="text-base font-extrabold font-display leading-tight text-black dark:text-white">
-            Voucher or Transfer Code
+            {t('voucherTitle')}
           </h2>
-          <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold">Enter prepaid ticket or session transfer code</p>
+          <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold">{t('voucherSubtitle')}</p>
         </div>
       </div>
 
       <form onSubmit={handleRedeem} className="space-y-3">
         <div className="flex gap-2">
           <Input
-            placeholder="e.g. VOUCH or PW-XXXXXX"
+            placeholder={t('voucherPlaceholder')}
             value={voucherCode}
             onChange={(e) => {
               setVoucherCode(e.target.value.toUpperCase());
@@ -94,12 +96,12 @@ export function VoucherInput({ onRedeemSuccess, isConnected = false, macHint }: 
             disabled={!voucherCode.trim()}
             className="shrink-0 px-4 sm:px-5 gap-1.5"
           >
-            <span>{isConnected ? 'Extend' : 'Connect'}</span>
+            <span>{isConnected ? t('voucherExtend') : t('voucherConnect')}</span>
             <ArrowRight className="w-4 h-4" />
           </Button>
         </div>
         <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-          Switching Wi-Fi (2.4G ⇄ 5G) or devices? Paste your Session Transfer Code here.
+          {t('voucherHint')}
         </p>
 
         {errorMsg && (

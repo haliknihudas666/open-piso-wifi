@@ -5,6 +5,7 @@ import { Gift, Sparkles, ArrowRight, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { formatDuration } from '@/lib/utils';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface FreeTrialBannerProps {
   minutes?: number;
@@ -12,6 +13,7 @@ interface FreeTrialBannerProps {
 }
 
 export function FreeTrialBanner({ minutes = 5, onClaimSuccess }: FreeTrialBannerProps) {
+  const { t } = usePortalLanguage();
   const [isClaiming, setIsClaiming] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -55,10 +57,10 @@ export function FreeTrialBanner({ minutes = 5, onClaimSuccess }: FreeTrialBanner
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <h3 className="text-sm font-extrabold font-display leading-tight">Daily Free Wi-Fi Trial</h3>
+              <h3 className="text-sm font-extrabold font-display leading-tight">{t('freeTrialTitle')}</h3>
             </div>
             <p className="text-xs text-neutral-800 font-semibold mt-0.5">
-              Get <span className="font-extrabold underline">{formattedTime}</span> of high-speed internet free today!
+              {t('freeTrialDescPrefix')} <span className="font-extrabold underline">{formattedTime}</span> {t('freeTrialDescSuffix')}
             </p>
           </div>
         </div>
@@ -72,7 +74,7 @@ export function FreeTrialBanner({ minutes = 5, onClaimSuccess }: FreeTrialBanner
           className="w-full sm:w-auto shrink-0 gap-1.5"
         >
           <Sparkles className="w-3.5 h-3.5 text-[#ffe17c]" />
-          <span>Claim {formattedTime} Free</span>
+          <span>{t('claimFreePrefix')} {formattedTime} {t('claimFreeSuffix')}</span>
           <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
         </Button>
       </div>

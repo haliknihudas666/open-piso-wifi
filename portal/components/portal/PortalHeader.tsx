@@ -2,10 +2,11 @@
 
 import React, { useMemo, useState } from 'react';
 import useSWR from 'swr';
-import { Wifi, Zap } from 'lucide-react';
+import { Wifi, Zap, Globe } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { SpeedReportModal } from '@/components/portal/SpeedReportModal';
 import { SpeedTestResult } from '@/app/api/speedtest/route';
+import { PortalLang, usePortalLanguage } from '@/lib/portal-i18n';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -27,6 +28,7 @@ export function PortalHeader({
   ssid,
 }: PortalHeaderProps) {
   const [showSpeedModal, setShowSpeedModal] = useState(false);
+  const { lang, setLang, t } = usePortalLanguage();
 
   // Fetch hourly cached speedtest result (fast ~10ms DB read)
   const { data: speedData } = useSWR<SpeedTestResult & { ageMinutes?: number }>('/api/speedtest', fetcher, {
@@ -74,13 +76,25 @@ export function PortalHeader({
                   {title}
                 </h1>
                 <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold mt-0.5 w-full break-words">
-                  {bannerMessage || 'Fast & Affordable High-Speed Wi-Fi'}
+                  {bannerMessage || t('defaultBanner')}
                 </p>
               </div>
             </div>
 
-            {/* Quick Controls: Theme Toggle */}
+            {/* Quick Controls: Language Dropdown & Theme Toggle */}
             <div className="flex items-center gap-1.5 shrink-0">
+              <label className="relative inline-flex items-center" title={t('langLabel')}>
+                <Globe className="w-3.5 h-3.5 text-black dark:text-[#ffe17c] absolute left-2 pointer-events-none" />
+                <select
+                  aria-label={t('langLabel')}
+                  value={lang}
+                  onChange={(e) => setLang(e.target.value as PortalLang)}
+                  className="h-9 pl-7 pr-2 rounded-xl border-2 border-black dark:border-[#4a6052] bg-[#f8f6ee] dark:bg-[#111713] text-black dark:text-white text-[11px] font-black shadow-neo-sm cursor-pointer focus:outline-none"
+                >
+                  <option value="en">English</option>
+                  <option value="taglish">Taglish</option>
+                </select>
+              </label>
               <ThemeToggle />
             </div>
           </div>

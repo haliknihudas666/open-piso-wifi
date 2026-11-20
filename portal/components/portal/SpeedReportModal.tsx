@@ -5,6 +5,7 @@ import { Zap, Activity, ArrowDown, ArrowUp, CheckCircle2, X, Clock, Gamepad2, Fi
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { SpeedTestResult } from '@/app/api/speedtest/route';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface SpeedReportModalProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ export function SpeedReportModal({
   speedData,
   onInsertCoinClick,
 }: SpeedReportModalProps) {
+  const { t } = usePortalLanguage();
   if (!isOpen) return null;
 
   const download = speedData?.downloadMbps || 50;
@@ -45,10 +47,10 @@ export function SpeedReportModal({
             </div>
             <div>
               <h3 className="text-base font-black font-display leading-tight">
-                Live Speed Test
+                {t('speedModalTitle')}
               </h3>
               <p className="text-[11px] font-semibold text-neutral-600 dark:text-[#b7c6c2]">
-                Automated Hourly Speed Benchmark
+                {t('speedModalSubtitle')}
               </p>
             </div>
           </div>
@@ -154,7 +156,7 @@ export function SpeedReportModal({
           size="md"
           className="w-full gap-2 shadow-neo font-display"
         >
-          <span>Insert Coins to Enjoy Speed</span>
+          <span>{t('speedCta')}</span>
         </Button>
       </div>
     </div>

@@ -5,6 +5,7 @@ import { Tag, Clock, Flame, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { DEFAULT_RATE_TIERS, RateTier } from '@/lib/rates';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface PricingTiersProps {
   rates?: RateTier[];
@@ -14,6 +15,7 @@ interface PricingTiersProps {
 }
 
 export function PricingTiers({ rates, activePulses = 0, onSelectTier, isLoading }: PricingTiersProps) {
+  const { t } = usePortalLanguage();
   const isPending = isLoading || !rates;
   const activeRates = rates && rates.length > 0 ? rates : DEFAULT_RATE_TIERS;
 
@@ -26,15 +28,15 @@ export function PricingTiers({ rates, activePulses = 0, onSelectTier, isLoading 
           </div>
           <div>
             <h2 className="text-base font-extrabold font-display leading-tight text-black dark:text-white">
-              Wi-Fi Rates & Plans
+              {t('ratesTitle')}
             </h2>
-            <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold">Coins stack time automatically</p>
+            <p className="text-xs text-neutral-600 dark:text-[#b7c6c2] font-semibold">{t('ratesSubtitle')}</p>
           </div>
         </div>
 
         {!isPending && onSelectTier && (
           <span className="text-[10px] font-extrabold text-neutral-600 dark:text-[#b7c6c2] uppercase tracking-wider hidden sm:inline">
-            Tap to test rate
+            {t('tapToTest')}
           </span>
         )}
       </div>

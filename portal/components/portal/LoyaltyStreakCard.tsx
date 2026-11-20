@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/Badge';
 import { formatDuration } from '@/lib/utils';
 import { LoyaltyCustomerStatus, LoyaltyMilestone } from '@/lib/loyalty';
 import { RewindShareModal } from '@/components/shared/RewindShareModal';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface LoyaltyStreakCardProps {
   loyalty?: LoyaltyCustomerStatus | null;
@@ -31,6 +32,7 @@ export function LoyaltyStreakCard({
   portalTitle = 'OpenPisoWiFi',
   onCodeCopied,
 }: LoyaltyStreakCardProps) {
+  const { t } = usePortalLanguage();
   const [copied, setCopied] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [showRewind, setShowRewind] = useState(false);
@@ -72,7 +74,7 @@ export function LoyaltyStreakCard({
           <div>
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-black uppercase tracking-wider text-black dark:text-white">
-                Daily Streak
+                {t('dailyStreak')}
               </span>
               <button
                 type="button"
@@ -84,7 +86,7 @@ export function LoyaltyStreakCard({
               </button>
             </div>
             <span className="text-[10px] font-bold text-neutral-500 dark:text-[#b7c6c2] block">
-              Credit every day to earn free hours
+              {t('streakSubtitle')}
             </span>
           </div>
         </div>
@@ -94,7 +96,7 @@ export function LoyaltyStreakCard({
           <div className="flex items-center gap-1 bg-neutral-100 dark:bg-black/40 px-2 py-1 rounded-lg border-2 border-black">
             <div className="text-right">
               <span className="text-[9px] font-extrabold uppercase text-neutral-500 dark:text-neutral-400 block leading-none">
-                Your Code
+                {t('yourCode')}
               </span>
               <span className="font-mono text-xs font-black text-black dark:text-[#ffe17c]">
                 {effectiveCode}
@@ -240,7 +242,7 @@ export function LoyaltyStreakCard({
         className="w-full py-2.5 px-3 rounded-xl border-2 border-black bg-[#ffe17c] hover:bg-[#ffd95e] text-black font-black text-xs uppercase tracking-wider shadow-neo-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer"
       >
         <Share2 className="w-3.5 h-3.5" />
-        <span>Share My Streak Rewind</span>
+        <span>{t('shareMyRewind')}</span>
       </button>
 
       <RewindShareModal

@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { formatRemainingTime } from '@/lib/utils';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface ActiveSessionCardProps {
   initialRemainingSeconds: number;
@@ -28,6 +29,7 @@ export function ActiveSessionCard({
   onSessionExpired,
   onStateChange,
 }: ActiveSessionCardProps) {
+  const { t } = usePortalLanguage();
   const [remainingSeconds, setRemainingSeconds] = useState(initialRemainingSeconds);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -339,7 +341,7 @@ export function ActiveSessionCard({
           className="w-full gap-2"
         >
           <Play className="w-4 h-4 fill-black" />
-          <span>Resume Time ({formattedTime})</span>
+          <span>{t('resumeTime')} ({formattedTime})</span>
         </Button>
       </Card>
     );
@@ -471,7 +473,7 @@ export function ActiveSessionCard({
             className="w-full gap-1.5"
           >
             <Pause className="w-3.5 h-3.5" />
-            <span>Pause Time (Freeze Timer)</span>
+            <span>{t('pauseTime')}</span>
           </Button>
         )}
 

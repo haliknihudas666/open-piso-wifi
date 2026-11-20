@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { formatDuration, cn } from '@/lib/utils';
+import { usePortalLanguage } from '@/lib/portal-i18n';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -39,6 +40,7 @@ export function CoinPoller({
   simulatedState,
   simulatedPulses,
 }: CoinPollerProps) {
+  const { t } = usePortalLanguage();
   const [isConnecting, setIsConnecting] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -488,7 +490,7 @@ export function CoinPoller({
                 className="w-full gap-2 shadow-neo font-display text-base"
               >
                 <Coins className="w-5 h-5 stroke-[2.5]" />
-                <span>{isConnected ? 'Insert Coins to Add Time' : 'Start Insert Coin'}</span>
+                <span>{isConnected ? t('insertCoinsAddTime') : t('startInsertCoin')}</span>
               </Button>
             )}
 
@@ -578,13 +580,13 @@ export function CoinPoller({
               {pulses > 0 ? (
                 <>
                   <Sparkles className="w-5 h-5 shrink-0" />
-                  <span>{isConnected ? 'Add Time Now' : 'Connect Now'}</span>
+                  <span>{isConnected ? t('addTimeNow') : t('connectNow')}</span>
                   <ArrowRight className="w-5 h-5 shrink-0" />
                 </>
               ) : (
                 <>
                   <Timer className="w-4 h-4 shrink-0 opacity-70" />
-                  <span className="opacity-70">Connect Now (Waiting for Coins...)</span>
+                  <span className="opacity-70">{t('waitingForCoins')}</span>
                 </>
               )}
             </Button>
@@ -592,8 +594,8 @@ export function CoinPoller({
             <div className="flex items-center justify-between text-[11px] font-bold text-neutral-600 dark:text-[#b7c6c2] px-1">
               <span>
                 {pulses > 0
-                  ? 'Drop more coins or tap Connect Now'
-                  : `Drop coins in the machine slot (${countdown ?? timeoutSeconds}s remaining)`}
+                  ? t('dropMoreOrConnect')
+                  : `${t('insertNowHint')} (${countdown ?? timeoutSeconds}s)`}
               </span>
               {pulses === 0 && (
                 <button
@@ -613,7 +615,7 @@ export function CoinPoller({
                   }}
                   className="underline hover:text-red-500 cursor-pointer font-bold transition-colors"
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
               )}
             </div>

@@ -13,6 +13,7 @@ import { AnnouncementTicker } from '@/components/portal/AnnouncementTicker';
 import { FreeTrialBanner } from '@/components/portal/FreeTrialBanner';
 import { SuccessConnectModal } from '@/components/portal/SuccessConnectModal';
 import { LoyaltyStreakCard } from '@/components/portal/LoyaltyStreakCard';
+import { PortalLanguageProvider } from '@/lib/portal-i18n';
 import { Button } from '@/components/ui/Button';
 import { ShieldCheck, Sparkles, X, RefreshCw, ArrowRight, WifiOff, Moon, Flame } from 'lucide-react';
 import {
@@ -218,6 +219,7 @@ export function PortalContent({
   };
 
   return (
+    <PortalLanguageProvider>
     <div className="w-full max-w-md mx-auto space-y-4 relative z-10">
       {/* Announcement Marquee */}
       {announcement && <AnnouncementTicker text={announcement} />}
@@ -419,5 +421,6 @@ export function PortalContent({
         </p>
       </footer>
     </div>
+    </PortalLanguageProvider>
   );
 }
