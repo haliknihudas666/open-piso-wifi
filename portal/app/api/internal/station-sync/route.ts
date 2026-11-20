@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const rawActiveMacs: string[] = Array.isArray(body.activeMacs) ? body.activeMacs : [];
+    const scanOk = body.scanOk === true;
 
     // Load auto-pause and auto-resume settings
     const settings = await prisma.setting.findMany({
@@ -87,12 +88,12 @@ export async function POST(request: NextRequest) {
     let resumedCount = 0;
 
     // 2. AUTO-PAUSE & AUTO-RESUME (When enabled)
-    // Safeguard: If the AP reported 0 active stations while active sessions exist,
-    // do NOT assume all stations simultaneously disconnected (likely AP query timeout or driver glitch).
-    const skipAutoPauseEvaluation = currentAssociatedMacs.size === 0 && validActiveSessions.length > 0;
+    // Safeguard: Only skip auto-pause on an empty scan if the caller did NOT confirm scanOk: true
+    // (when scanOk is true, 0 associated stations means all Wi-Fi clients genuinely disconnected!).
+    const skipAutoPauseEvaluation = !scanOk && currentAssociatedMacs.size === 0 && validActiveSessions.length > 0;
     if (skipAutoPauseEvaluation) {
       console.warn(
-        `[STATION SYNC] Station scan returned 0 devices while ${validActiveSessions.length} active sessions exist. Skipping auto-pause to prevent false mass-disconnections.`
+        `[STATION SYNC] Unverified empty station scan while ${validActiveSessions.length} active sessions exist. Skipping auto-pause.`
       );
     }
 

@@ -1551,13 +1551,16 @@ async function syncConnectedStationsWithPortal() {
   isStationSyncing = true;
 
   try {
-    const clients = await router.getConnectedClients();
-    const activeMacs = clients.map((c) => c.mac).filter(Boolean);
+    // Query ONLY live associated Wi-Fi stations (not 24h DHCP leases) so disconnects trigger Auto-Pause
+    const scan = await router.getAssociatedWifiMacs();
+    if (!scan.ok) {
+      return;
+    }
 
     await fetch(PORTAL_INTERNAL_SYNC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeMacs }),
+      body: JSON.stringify({ activeMacs: scan.macs, scanOk: true }),
       signal: AbortSignal.timeout(5000),
     });
   } catch (err: any) {

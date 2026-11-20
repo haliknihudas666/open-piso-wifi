@@ -1732,6 +1732,59 @@ echo "DNS_OK"
       this.speedtestInFlight = null;
     }
   }
+
+  /**
+   * Returns ONLY currently associated Wi-Fi station MAC addresses directly from OpenWrt radios
+   * (iw station dump / iwinfo assoclist), explicitly excluding 24-hour DHCP leases & ARP cache
+   * so Auto-Pause accurately detects when a device disconnects from Wi-Fi.
+   */
+  public async getAssociatedWifiMacs(): Promise<{ ok: boolean; macs: string[] }> {
+    if (this.config.mode === 'simulation') {
+      return { ok: true, macs: ['02:00:00:00:00:01', '02:00:00:00:00:02'] };
+    }
+
+    const command = `
+echo "__STATION_SCAN_OK__"
+IFACES=""
+if command -v iw >/dev/null 2>&1; then
+  IFACES="$(iw dev 2>/dev/null | awk '/Interface/ {print $2}')"
+fi
+if [ -z "$IFACES" ]; then
+  for d in /sys/class/net/*/phy80211; do
+    [ -d "$d" ] && IFACES="$IFACES $(basename "$(dirname "$d")")"
+  done
+fi
+[ -z "$IFACES" ] && IFACES="phy0-ap0 phy1-ap0 wlan0 wlan1"
+
+SEEN=""
+for iface in $IFACES; do
+  [ -z "$iface" ] && continue
+  [ ! -d "/sys/class/net/$iface" ] && continue
+  case " $SEEN " in *" $iface "*) continue ;; esac
+  SEEN="$SEEN $iface"
+  if command -v iw >/dev/null 2>&1; then
+    iw dev "$iface" station dump 2>/dev/null | awk '/^Station / {print $2}'
+  elif command -v iwinfo >/dev/null 2>&1; then
+    iwinfo "$iface" assoclist 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
+  fi
+done
+`.trim();
+
+    const res = await this.executeCommand(command);
+    if (res.code !== 0 || !res.stdout.includes('__STATION_SCAN_OK__')) {
+      return { ok: false, macs: [] };
+    }
+
+    const macSet = new Set<string>();
+    for (const line of res.stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(trimmed)) {
+        macSet.add(normalizeMac(trimmed));
+      }
+    }
+
+    return { ok: true, macs: Array.from(macSet) };
+  }
 }
 
 
