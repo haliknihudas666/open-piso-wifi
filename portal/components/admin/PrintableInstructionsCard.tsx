@@ -42,8 +42,10 @@ import {
   getPosterSteps,
   getSessionCodeNotice,
   generatePosterSvg,
+  generatePlainTextGuide,
   downloadPosterImage,
   downloadPosterSvg,
+  downloadPosterText,
 } from '@/lib/instruction-poster';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
@@ -120,6 +122,24 @@ export function PrintableInstructionsCard({
     const filename = `${config.title.toLowerCase().replace(/\s+/g, '-')}-instructions-${config.language}-${config.visualMode}-${config.format}.svg`;
     downloadPosterSvg(svg, filename);
     setExportSuccessMsg('Successfully downloaded scalable vector SVG!');
+    setTimeout(() => setExportSuccessMsg(null), 4000);
+  };
+
+  const handleCopyPlainText = async () => {
+    const text = generatePlainTextGuide(config);
+    try {
+      await navigator.clipboard.writeText(text);
+      setExportSuccessMsg('Copied plain-text customer guide to clipboard!');
+      setTimeout(() => setExportSuccessMsg(null), 4000);
+    } catch {
+      handleDownloadTxt();
+    }
+  };
+
+  const handleDownloadTxt = () => {
+    const filename = `${config.title.toLowerCase().replace(/\s+/g, '-')}-instructions-${config.language}.txt`;
+    downloadPosterText(config, filename);
+    setExportSuccessMsg('Downloaded plain-text guide (.txt)!');
     setTimeout(() => setExportSuccessMsg(null), 4000);
   };
 
@@ -210,6 +230,24 @@ export function PrintableInstructionsCard({
                   title="Download Scalable Vector SVG (Ideal for Large Billboard / Tarpaulin Printing)"
                 >
                   Vector SVG
+                </button>
+                <span className="text-neutral-300 dark:text-neutral-700">|</span>
+                <button
+                  type="button"
+                  onClick={handleCopyPlainText}
+                  className="px-2.5 py-1 rounded-lg text-xs font-black hover:bg-neutral-100 dark:hover:bg-neutral-800 text-black dark:text-white cursor-pointer transition-colors"
+                  title="Copy Plain Text Guide to Clipboard"
+                >
+                  Copy Text
+                </button>
+                <span className="text-neutral-300 dark:text-neutral-700">|</span>
+                <button
+                  type="button"
+                  onClick={handleDownloadTxt}
+                  className="px-2.5 py-1 rounded-lg text-xs font-black hover:bg-neutral-100 dark:hover:bg-neutral-800 text-black dark:text-white cursor-pointer transition-colors"
+                  title="Download Plain Text File (.txt)"
+                >
+                  Save TXT
                 </button>
               </div>
 
@@ -326,14 +364,21 @@ export function PrintableInstructionsCard({
                     <span>Visual Style</span>
                   </span>
                   <span className="text-[10px] font-mono text-emerald-600 dark:text-[#4ade80] font-black">
-                    {config.visualMode === 'dynamic-phone' ? 'Dynamic' : config.visualMode === 'raw-components' ? 'Raw UI' : 'Vector'}
+                    {config.visualMode === 'dynamic-phone'
+                      ? 'Dynamic'
+                      : config.visualMode === 'raw-components'
+                      ? 'Raw UI'
+                      : config.visualMode === 'text-only'
+                      ? 'Text Only'
+                      : 'Vector'}
                   </span>
                 </label>
-                <div className="grid grid-cols-3 gap-1">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
                   {[
                     { id: 'dynamic-phone', label: '📱 Phone' },
                     { id: 'raw-components', label: '💻 Raw UI' },
                     { id: 'illustrated', label: '🎨 Vector' },
+                    { id: 'text-only', label: '📝 Text Only' },
                   ].map((mode) => (
                     <button
                       key={mode.id}
@@ -349,7 +394,7 @@ export function PrintableInstructionsCard({
                   ))}
                 </div>
                 <p className="text-[10px] font-medium text-neutral-500 dark:text-neutral-400">
-                  Choose live phone mockups, UI components, or vector cards.
+                  Choose live phone mockups, UI components, vector cards, or ink-saving Text Only.
                 </p>
               </div>
 
@@ -807,7 +852,8 @@ export function PrintableInstructionsCard({
                           )}
                         </div>
 
-                        {/* Visual Mockup (Fixed 9:16 smartphone ratio) */}
+                        {/* Visual Mockup (Hidden in Text-Only mode) */}
+                        {config.visualMode !== 'text-only' && (
                         <div className="shrink-0 flex justify-center items-center">
                           {config.visualMode === 'dynamic-phone' ? (
                             <DynamicPortalPhoneMockup
@@ -879,6 +925,7 @@ export function PrintableInstructionsCard({
                             </div>
                           )}
                         </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -930,6 +977,7 @@ export function PrintableInstructionsCard({
                         </p>
                       </div>
 
+                      {config.visualMode !== 'text-only' && (
                       <div className="shrink-0 flex justify-center items-center">
                         {config.visualMode === 'dynamic-phone' ? (
                           <DynamicPortalPhoneMockup
@@ -956,6 +1004,7 @@ export function PrintableInstructionsCard({
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1030,6 +1079,7 @@ export function PrintableInstructionsCard({
                             </div>
                           </div>
 
+                          {config.visualMode !== 'text-only' && (
                           <div className="w-full md:w-auto md:min-w-[260px] shrink-0 self-stretch md:self-center flex justify-center">
                             {config.visualMode === 'dynamic-phone' ? (
                               <DynamicPortalPhoneMockup
@@ -1058,6 +1108,7 @@ export function PrintableInstructionsCard({
                               </div>
                             )}
                           </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -1091,7 +1142,7 @@ export function PrintableInstructionsCard({
                         </p>
                       </div>
 
-                      {config.visualMode === 'dynamic-phone' ? (
+                      {config.visualMode !== 'text-only' && (config.visualMode === 'dynamic-phone' ? (
                         <DynamicPortalPhoneMockup
                           state="session"
                           title={config.title}
@@ -1114,7 +1165,7 @@ export function PrintableInstructionsCard({
                             <span>COPY CODE</span>
                           </div>
                         </div>
-                      )}
+                      ))}
                     </div>
                   </div>
                 )}

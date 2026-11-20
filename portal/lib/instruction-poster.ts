@@ -14,7 +14,7 @@ export type PosterFormat =
 
 export type PosterLayout = 'grid-2col' | 'vertical-stack';
 
-export type PosterVisualMode = 'dynamic-phone' | 'raw-components' | 'illustrated';
+export type PosterVisualMode = 'dynamic-phone' | 'raw-components' | 'illustrated' | 'text-only';
 
 export interface PosterConfig {
   title: string;
@@ -286,6 +286,72 @@ export function getSessionCodeNotice(lang: 'taglish' | 'english') {
   };
 }
 
+export function generatePlainTextGuide(config: PosterConfig): string {
+  const ssidList =
+    config.ssid2g && config.ssid5g && config.ssid2g !== config.ssid5g
+      ? `${config.ssid2g} / ${config.ssid5g}`
+      : config.ssid2g || config.ssid5g;
+
+  const isEn = config.language === 'english';
+  const primarySteps = isEn ? getPosterSteps('english', config) : getPosterSteps('taglish', config);
+  const enSteps = getPosterSteps('english', config);
+  const notice = isEn ? getSessionCodeNotice('english') : getSessionCodeNotice('taglish');
+
+  const lines: string[] = [];
+  lines.push('==================================================');
+  lines.push(config.title.toUpperCase());
+  if (config.tagline) lines.push(config.tagline);
+  lines.push('==================================================');
+  lines.push('');
+  lines.push(`Wi-Fi Name (SSID): ${ssidList}`);
+  lines.push(`Portal Address:    http://${config.portalIp}/`);
+  if (config.showRates && config.ratesText) {
+    lines.push(`Wi-Fi Rates:       ${config.ratesText}`);
+  }
+  lines.push('');
+  lines.push(isEn ? 'HOW TO CONNECT:' : 'PAANO KUMONEKTA (HOW TO CONNECT):');
+  lines.push('--------------------------------------------------');
+
+  primarySteps.forEach((step, idx) => {
+    lines.push(`${step.stepNum}. ${step.title}`);
+    step.instructions.forEach((inst) => {
+      lines.push(`   - ${inst}`);
+    });
+    if (config.language === 'dual' && enSteps[idx]) {
+      lines.push(`   [EN] ${enSteps[idx].instructions.join(' ')}`);
+    }
+    lines.push('');
+  });
+
+  if (config.showSessionCodeTip) {
+    lines.push('--------------------------------------------------');
+    lines.push(notice.title);
+    lines.push(notice.text);
+    lines.push('');
+  }
+
+  if (config.storeNote) {
+    lines.push('--------------------------------------------------');
+    lines.push(`Note: ${config.storeNote}`);
+  }
+  lines.push('==================================================');
+
+  return lines.join('\n');
+}
+
+export function downloadPosterText(config: PosterConfig, filename: string): void {
+  const text = generatePlainTextGuide(config);
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 /**
  * Generates an SVG string representation of the poster.
  * Perfectly sized for high-DPI export or vector printing.
@@ -307,6 +373,74 @@ export function generatePosterSvg(config: PosterConfig): string {
   } else if (config.format === 'tent-card') {
     width = 1050;
     height = 1485;
+  }
+
+  if (config.visualMode === 'text-only') {
+    const primarySteps = config.language === 'english' ? getPosterSteps('english', config) : getPosterSteps('taglish', config);
+    const enSteps = getPosterSteps('english', config);
+    const sessionNotice = config.language === 'english' ? getSessionCodeNotice('english') : getSessionCodeNotice('taglish');
+    const ssidList =
+      config.ssid2g && config.ssid5g && config.ssid2g !== config.ssid5g
+        ? `${config.ssid2g} / ${config.ssid5g}`
+        : config.ssid2g || config.ssid5g;
+
+    const padX = 64;
+    const innerW = width - padX * 2;
+    const topY = config.showRates ? 290 : 230;
+    const footerH = config.showSessionCodeTip ? 210 : 90;
+    const availableH = height - topY - footerH - 36;
+    const stepH = Math.max(110, Math.floor(availableH / primarySteps.length) - 16);
+
+    const stepsSvg = primarySteps
+      .map((step, idx) => {
+        const y = topY + idx * (stepH + 16);
+        const line1 = step.instructions[0] || '';
+        const line2 = step.instructions[1] || '';
+        const line3 =
+          config.language === 'dual' && enSteps[idx]
+            ? `EN: ${enSteps[idx].instructions.join(' ')}`
+            : step.instructions[2] || '';
+        return `
+  <g transform="translate(${padX}, ${y})">
+    <rect x="0" y="0" width="${innerW}" height="${stepH}" rx="12" fill="#ffffff" stroke="#000000" stroke-width="3" />
+    <circle cx="48" cy="${Math.round(stepH / 2)}" r="28" fill="#000000" />
+    <text x="48" y="${Math.round(stepH / 2) + 10}" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">${step.stepNum}</text>
+    <text x="96" y="38" font-size="24" font-weight="900" fill="#000000">${escapeXml(step.title)}</text>
+    <text x="96" y="68" font-size="16" font-weight="600" fill="#111111">${escapeXml(line1.slice(0, 115))}</text>
+    ${line2 ? `<text x="96" y="92" font-size="16" font-weight="600" fill="#111111">${escapeXml(line2.slice(0, 115))}</text>` : ''}
+    ${line3 ? `<text x="96" y="116" font-size="14" font-weight="700" fill="#444444">${escapeXml(line3.slice(0, 125))}</text>` : ''}
+  </g>`;
+      })
+      .join('\n');
+
+    const tipY = height - footerH;
+    const tipSvg = config.showSessionCodeTip
+      ? `
+  <g transform="translate(${padX}, ${tipY})">
+    <rect x="0" y="0" width="${innerW}" height="126" rx="12" fill="#f5f5f5" stroke="#000000" stroke-width="3" />
+    <text x="24" y="36" font-size="18" font-weight="900" fill="#000000">${escapeXml(sessionNotice.title)}</text>
+    <text x="24" y="66" font-size="14" font-weight="600" fill="#111111">${escapeXml(sessionNotice.text.slice(0, 125))}</text>
+    <text x="24" y="90" font-size="14" font-weight="600" fill="#111111">${escapeXml(sessionNotice.text.slice(125, 250))}</text>
+  </g>`
+      : '';
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <rect width="${width}" height="${height}" fill="#ffffff" />
+  <rect x="24" y="24" width="${width - 48}" height="${height - 48}" rx="18" fill="#ffffff" stroke="#000000" stroke-width="4" />
+
+  <text x="${width / 2}" y="96" font-size="48" font-weight="900" fill="#000000" text-anchor="middle">${escapeXml(config.title.toUpperCase())}</text>
+  <text x="${width / 2}" y="136" font-size="20" font-weight="700" fill="#333333" text-anchor="middle">${escapeXml(config.tagline)}</text>
+  <text x="${width / 2}" y="178" font-size="22" font-weight="900" fill="#000000" font-family="monospace" text-anchor="middle">Wi-Fi: ${escapeXml(ssidList)}   |   Portal: http://${escapeXml(config.portalIp)}/</text>
+  <line x1="${padX}" y1="202" x2="${width - padX}" y2="202" stroke="#000000" stroke-width="3" />
+
+  ${config.showRates ? `<text x="${width / 2}" y="252" font-size="22" font-weight="900" fill="#000000" text-anchor="middle">RATES: ${escapeXml(config.ratesText)}</text>` : ''}
+
+  ${stepsSvg}
+  ${tipSvg}
+
+  <text x="${width / 2}" y="${height - 46}" font-size="15" font-weight="700" fill="#333333" text-anchor="middle">${escapeXml(config.storeNote || 'Powered by OpenPisoWiFi')}</text>
+</svg>`;
   }
 
   const primarySteps = getPosterSteps(config.language === 'english' ? 'english' : 'taglish', config);

@@ -276,14 +276,21 @@ function PrintableInstructionsContent() {
                     <span>Visual Style</span>
                   </span>
                   <span className="text-[9px] font-mono text-emerald-600 font-black">
-                    {config.visualMode === 'dynamic-phone' ? 'Dynamic' : config.visualMode === 'raw-components' ? 'Raw UI' : 'Vector'}
+                    {config.visualMode === 'dynamic-phone'
+                      ? 'Dynamic'
+                      : config.visualMode === 'raw-components'
+                      ? 'Raw UI'
+                      : config.visualMode === 'text-only'
+                      ? 'Text Only'
+                      : 'Vector'}
                   </span>
                 </label>
-                <div className="grid grid-cols-3 gap-1">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
                   {[
                     { id: 'dynamic-phone', label: '📱 Phone' },
                     { id: 'raw-components', label: '💻 Raw UI' },
                     { id: 'illustrated', label: '🎨 Vector' },
+                    { id: 'text-only', label: '📝 Text' },
                   ].map((mode) => (
                     <button
                       key={mode.id}
@@ -705,7 +712,8 @@ function PrintableInstructionsContent() {
                         )}
                       </div>
 
-                      {/* Visual Mockup (Fixed 9:16 smartphone ratio) */}
+                      {/* Visual Mockup (Hidden in Text-Only mode) */}
+                      {config.visualMode !== 'text-only' && (
                       <div className="shrink-0 flex justify-center items-center">
                         {config.visualMode === 'dynamic-phone' ? (
                           <DynamicPortalPhoneMockup
@@ -777,6 +785,7 @@ function PrintableInstructionsContent() {
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -828,6 +837,7 @@ function PrintableInstructionsContent() {
                       </p>
                     </div>
 
+                    {config.visualMode !== 'text-only' && (
                     <div className="shrink-0 flex justify-center items-center">
                       {config.visualMode === 'dynamic-phone' ? (
                         <DynamicPortalPhoneMockup
@@ -854,6 +864,7 @@ function PrintableInstructionsContent() {
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -928,6 +939,7 @@ function PrintableInstructionsContent() {
                           </div>
                         </div>
 
+                        {config.visualMode !== 'text-only' && (
                         <div className="w-full sm:w-auto sm:min-w-[240px] shrink-0 flex justify-center">
                           {config.visualMode === 'dynamic-phone' ? (
                             <DynamicPortalPhoneMockup
@@ -956,6 +968,7 @@ function PrintableInstructionsContent() {
                             </div>
                           )}
                         </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -989,7 +1002,7 @@ function PrintableInstructionsContent() {
                       </p>
                     </div>
 
-                    {config.visualMode === 'dynamic-phone' ? (
+                    {config.visualMode !== 'text-only' && (config.visualMode === 'dynamic-phone' ? (
                       <DynamicPortalPhoneMockup
                         state="session"
                         title={config.title}
@@ -1012,7 +1025,7 @@ function PrintableInstructionsContent() {
                           <span>COPY CODE</span>
                         </div>
                       </div>
-                    )}
+                    ))}
                   </div>
                 </div>
               )}
