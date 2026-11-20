@@ -125,15 +125,15 @@ fi
 # ------------------------------------------------------------------------------
 # STEP 1: INSTALL REQUIRED PACKAGES (Supports opkg & apk)
 # ------------------------------------------------------------------------------
-echo "--> Checking and installing OpenWrt packages (tc, iwinfo, schedulers)..."
+echo "--> Checking and installing OpenWrt packages (tc, iwinfo, schedulers, speedtestcpp)..."
 if command -v apk >/dev/null 2>&1; then
     apk update 2>/dev/null || true
-    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo; do
+    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp; do
         apk add "$pkg" 2>/dev/null || true
     done
 elif command -v opkg >/dev/null 2>&1; then
     opkg update 2>/dev/null || true
-    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo; do
+    for pkg in tc-tiny tc-full kmod-sched-cake kmod-sched-core kmod-sched-fq-codel iwinfo speedtestcpp; do
         opkg install "$pkg" 2>/dev/null || true
     done
 fi

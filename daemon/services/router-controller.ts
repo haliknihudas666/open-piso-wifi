@@ -1613,6 +1613,125 @@ echo "DNS_OK"
     }
     return { success: res.code === 0, error: res.stderr || undefined };
   }
+
+  private speedtestInFlight: Promise<{
+    success: boolean;
+    downloadMbps?: number;
+    uploadMbps?: number;
+    pingMs?: number;
+    jitterMs?: number;
+    server?: string;
+    isp?: string;
+    source?: string;
+    error?: string;
+  }> | null = null;
+
+  /**
+   * Executes a live Gigabit WAN speedtest directly on the OpenWrt router using speedtestcpp
+   * so results reflect true router WAN bandwidth rather than a 100Mbps Raspberry Pi Ethernet cap.
+   */
+  public async runSpeedtest(): Promise<{
+    success: boolean;
+    downloadMbps?: number;
+    uploadMbps?: number;
+    pingMs?: number;
+    jitterMs?: number;
+    server?: string;
+    isp?: string;
+    source?: string;
+    error?: string;
+  }> {
+    if (this.speedtestInFlight) {
+      return this.speedtestInFlight;
+    }
+
+    this.speedtestInFlight = (async () => {
+      if (this.config.mode === 'simulation') {
+        return {
+          success: true,
+          downloadMbps: 350.5,
+          uploadMbps: 220.4,
+          pingMs: 6,
+          jitterMs: 1,
+          server: 'Simulated Fiber Node',
+          isp: 'OpenPisoWiFi Simulator',
+          source: 'openwrt_speedtestcpp',
+        };
+      }
+
+      const cmd =
+        'if command -v speedtest >/dev/null 2>&1; then speedtest --output json --insecure 2>/dev/null; else echo "__NO_SPEEDTEST__"; fi';
+
+      const res = await this.executeCommand(cmd);
+      const raw = (res.stdout || '').trim();
+
+      if (!raw || raw.includes('__NO_SPEEDTEST__')) {
+        return {
+          success: false,
+          error: 'speedtestcpp is not installed on the OpenWrt router',
+        };
+      }
+
+      // Extract the JSON line from stdout in case of any leading/trailing notices
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return {
+          success: false,
+          error: `Unexpected speedtest output: ${raw.slice(0, 120)}`,
+        };
+      }
+
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as {
+          download_mbit?: number;
+          upload_mbit?: number;
+          download?: number;
+          upload?: number;
+          ping?: number;
+          jitter?: number;
+          server?: { name?: string; sponsor?: string };
+          client?: { isp?: string };
+        };
+
+        const downloadMbps = Number(
+          (parsed.download_mbit ?? (parsed.download ? parsed.download / 1_000_000 : 0)).toFixed(1)
+        );
+        const uploadMbps = Number(
+          (parsed.upload_mbit ?? (parsed.upload ? parsed.upload / 1_000_000 : 0)).toFixed(1)
+        );
+        const pingMs = Math.max(1, Math.round(parsed.ping ?? 0));
+        const jitterMs = Math.max(0, Math.round(parsed.jitter ?? 0));
+
+        if (!downloadMbps || downloadMbps <= 0) {
+          return { success: false, error: 'Router speedtest returned zero download speed' };
+        }
+
+        const serverLabel = [parsed.server?.sponsor, parsed.server?.name].filter(Boolean).join(' - ') || undefined;
+
+        return {
+          success: true,
+          downloadMbps,
+          uploadMbps,
+          pingMs,
+          jitterMs,
+          server: serverLabel,
+          isp: parsed.client?.isp || undefined,
+          source: 'openwrt_speedtestcpp',
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          error: `Failed to parse router speedtest JSON: ${err.message || String(err)}`,
+        };
+      }
+    })();
+
+    try {
+      return await this.speedtestInFlight;
+    } finally {
+      this.speedtestInFlight = null;
+    }
+  }
 }
 
 

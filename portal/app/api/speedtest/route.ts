@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
+import { runRouterSpeedtest } from '@/lib/daemon';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,16 +12,57 @@ export interface SpeedTestResult {
   gamingReady: boolean;
   streamingReady: boolean;
   testedAt: number;
-  source: 'real_probe' | 'fallback_qos';
+  source: 'openwrt_speedtest' | 'real_probe' | 'fallback_qos';
+  server?: string;
+  isp?: string;
 }
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 Hour Cache
 
+function getSpeedGrade(downloadMbps: number): string {
+  if (downloadMbps >= 100) return 'Gigabit Fiber Speed';
+  if (downloadMbps >= 50) return 'Ultra High-Speed Fiber';
+  if (downloadMbps >= 25) return 'High-Speed Fiber';
+  if (downloadMbps >= 10) return 'Fast Broadband';
+  return 'Standard Wi-Fi';
+}
+
 /**
- * Executes a lightweight live network speed and latency probe
- * using fast global CDN endpoints. Runs in ~0.5s with minimal data usage.
+ * Executes a live WAN speedtest directly on the OpenWrt router (speedtestcpp)
+ * so results reflect true Gigabit WAN speed instead of a 100Mbps Raspberry Pi port cap.
+ * Falls back to a lightweight Cloudflare probe on the Pi if router speedtest is unavailable.
  */
 async function runRealSpeedProbe(): Promise<SpeedTestResult> {
+  // 1. Primary: Run speedtestcpp directly on the OpenWrt Gigabit router via daemon
+  try {
+    const routerResult = await runRouterSpeedtest();
+    if (
+      routerResult.success &&
+      typeof routerResult.downloadMbps === 'number' &&
+      routerResult.downloadMbps > 0
+    ) {
+      const downloadMbps = routerResult.downloadMbps;
+      const uploadMbps = routerResult.uploadMbps ?? Math.round(downloadMbps * 0.5 * 10) / 10;
+      const pingMs = Math.max(1, Math.round(routerResult.pingMs ?? 5));
+
+      return {
+        downloadMbps,
+        uploadMbps,
+        pingMs,
+        grade: getSpeedGrade(downloadMbps),
+        gamingReady: pingMs <= 45,
+        streamingReady: downloadMbps >= 10,
+        testedAt: Date.now(),
+        source: 'openwrt_speedtest',
+        server: routerResult.server,
+        isp: routerResult.isp,
+      };
+    }
+  } catch {
+    // Fall through to local RPi probe
+  }
+
+  // 2. Secondary Fallback: Lightweight Cloudflare probe from the Raspberry Pi
   try {
     // 1. Latency Probe (Ping)
     const pingStart = performance.now();
@@ -58,20 +100,11 @@ async function runRealSpeedProbe(): Promise<SpeedTestResult> {
       // Keep estimated upload if probe blocked
     }
 
-    const grade =
-      downloadMbps >= 50
-        ? 'Ultra High-Speed Fiber'
-        : downloadMbps >= 25
-        ? 'High-Speed Fiber'
-        : downloadMbps >= 10
-        ? 'Fast Broadband'
-        : 'Standard Wi-Fi';
-
     return {
       downloadMbps,
       uploadMbps,
       pingMs,
-      grade,
+      grade: getSpeedGrade(downloadMbps),
       gamingReady: pingMs <= 45,
       streamingReady: downloadMbps >= 10,
       testedAt: Date.now(),

@@ -1316,6 +1316,25 @@ app.post('/api/router/dns', async (req: Request, res: Response) => {
   }
 });
 
+// Run Gigabit WAN Speedtest directly on OpenWrt Router (speedtestcpp)
+app.get('/api/router/speedtest', async (_req: Request, res: Response) => {
+  try {
+    const result = await router.runSpeedtest();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message || 'Failed to run router speedtest' });
+  }
+});
+
+app.post('/api/router/speedtest', async (_req: Request, res: Response) => {
+  try {
+    const result = await router.runSpeedtest();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message || 'Failed to run router speedtest' });
+  }
+});
+
 app.listen(PORT, BIND_HOST, () => {
   console.log(`Hardware Daemon running on http://${BIND_HOST}:${PORT} [GPIO Available: ${isHardwareGpioAvailable}] [Router: ${router.getConfig().host}]`);
 

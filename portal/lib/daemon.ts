@@ -811,3 +811,33 @@ export async function syncRouterDns(
     return { success: false, message: err.message || 'Daemon offline' };
   }
 }
+
+/**
+ * Runs a Gigabit WAN speedtest directly on the OpenWrt router via daemon SSH (speedtestcpp).
+ */
+export async function runRouterSpeedtest(): Promise<{
+  success: boolean;
+  downloadMbps?: number;
+  uploadMbps?: number;
+  pingMs?: number;
+  jitterMs?: number;
+  server?: string;
+  isp?: string;
+  source?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/router/speedtest`, {
+      method: 'POST',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(45000),
+    });
+
+    if (res.ok) {
+      return await res.json();
+    }
+    return { success: false, error: `Daemon returned status ${res.status}` };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Daemon offline' };
+  }
+}
