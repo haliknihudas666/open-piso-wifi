@@ -120,7 +120,9 @@ export function PortalContent({
       if (isShortcutAlias || (isExternalProbeHost && Boolean(configuredPortalIp))) {
         const targetIp = configuredPortalIp || '192.168.1.240';
         const targetPort = sessionData?.portalPort || '3000';
-        const targetUrl = targetPort === '80' ? `http://${targetIp}/` : `http://${targetIp}:${targetPort}/`;
+        const currentPort = window.location.port;
+        const hidePort = targetPort === '80' || currentPort === '' || currentPort === '80';
+        const targetUrl = hidePort ? `http://${targetIp}/` : `http://${targetIp}:${targetPort}/`;
         if (window.location.href !== targetUrl) {
           window.location.replace(targetUrl);
         }

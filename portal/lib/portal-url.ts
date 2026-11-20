@@ -52,26 +52,28 @@ export async function getPortalSettings(): Promise<{
  */
 export async function getPortalRedirectUrl(requestHost?: string | null): Promise<string> {
   const { domain, ip, port } = await getPortalSettings();
+  // In production on Raspberry Pi, pisowifi-daemon reverse-proxies port 80 -> :3000,
+  // so omit the port from customer-facing URLs (e.g. http://10.0.0.1/).
+  const formatUrl = (host: string) =>
+    port === '80' || process.env.NODE_ENV === 'production' ? `http://${host}/` : `http://${host}:${port}/`;
 
   // If the incoming request explicitly accessed via domain (non-.local) or direct IP, keep that host
   if (requestHost) {
     const cleanReqHost = requestHost.split(':')[0].toLowerCase();
     if (cleanReqHost === domain.toLowerCase() && !cleanReqHost.endsWith('.local')) {
-      return port === '80' ? `http://${cleanReqHost}/` : `http://${cleanReqHost}:${port}/`;
+      return formatUrl(cleanReqHost);
     }
     if (cleanReqHost === ip) {
-      return port === '80' ? `http://${cleanReqHost}/` : `http://${cleanReqHost}:${port}/`;
+      return formatUrl(cleanReqHost);
     }
   }
 
   // If domain is not configured, ends with .local (which fails on Apple devices due to mDNS RFC 6762),
-  // or is the 10.0.0.1 shortcut (which would cause NAT masquerade to mask the real client MAC),
-  // redirect captive probes to the direct portal IP (e.g. http://192.168.1.240:3000/) so that:
-  // 1. Apple CNA modals pop up instantly without DNS/mDNS resolution delays.
-  // 2. The connection is direct Layer 2, allowing the portal to detect the client's real MAC address!
-  if (!domain || domain.toLowerCase().endsWith('.local') || domain === '10.0.0.1') {
-    return port === '80' ? `http://${ip}/` : `http://${ip}:${port}/`;
+  // or is the 10.0.0.1 shortcut (when RPi is on another IP), redirect captive probes to the direct portal IP
+  // so Apple CNA modals pop up instantly and Layer 2 MAC detection works natively.
+  if (!domain || domain.toLowerCase().endsWith('.local') || (domain === '10.0.0.1' && ip !== '10.0.0.1')) {
+    return formatUrl(ip);
   }
 
-  return port === '80' ? `http://${domain}/` : `http://${domain}:${port}/`;
+  return formatUrl(domain);
 }

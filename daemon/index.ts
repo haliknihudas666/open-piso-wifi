@@ -1400,44 +1400,92 @@ app.listen(PORT, BIND_HOST, () => {
 });
 
 // -------------------------------------------------------------
-// NATIVE PORT 80 -> 3000 HTTP REDIRECT SERVER
+// NATIVE PORT 80 -> 3000 REVERSE PROXY (HIDES :3000 FROM URL)
 // -------------------------------------------------------------
-// Since pisowifi-daemon runs as root on Raspberry Pi, listening on port 80 ensures that
-// any browser or device opening http://wifi.local or http://10.0.0.1 or http://192.168.1.240
-// without port :3000 is immediately redirected to the Next.js captive portal on port 3000.
+// Since pisowifi-daemon runs as root on Raspberry Pi, listening on port 80 lets
+// customers visit http://10.0.0.1/ or http://wifi.local/ with no port in the URL.
+// Only when 10.0.0.1 is used as an OpenWrt SNAT shortcut alias (PORTAL_IP != 10.0.0.1)
+// do we issue a fast port-free 302 redirect to http://${PORTAL_IP}/ so the browser
+// switches to a direct Layer 2 connection that preserves the real client MAC.
 const PORTAL_PORT = process.env.PORTAL_PORT || '3000';
 const DEFAULT_PORTAL_HOST = process.env.PORTAL_DOMAIN || process.env.PORTAL_IP || 'wifi.local';
 const port80Server = http.createServer((req, res) => {
   const hostHeader = req.headers.host || DEFAULT_PORTAL_HOST;
-  const cleanHost = hostHeader.split(':')[0];
-  // If request accessed via 10.0.0.1 shortcut, redirect to the actual portal IP (e.g. 192.168.1.240)
-  // so the browser connects directly on LAN without NAT masquerade, preserving real client MAC!
-  const targetHost = cleanHost === '10.0.0.1' ? (process.env.PORTAL_IP || '192.168.1.240') : cleanHost;
-  const destination = `http://${targetHost}:${PORTAL_PORT}${req.url || '/'}`;
+  const cleanHost = hostHeader.split(':')[0].toLowerCase();
+  const configuredPortalIp = (process.env.PORTAL_IP || '192.168.1.240').trim();
 
-  res.writeHead(302, {
-    Location: destination,
-    'Cache-Control': 'no-cache, no-store, must-revalidate',
+  // If 10.0.0.1 is a NAT-masqueraded shortcut alias on a non-10.0.0.1 Pi,
+  // redirect cleanly (without :3000) to the Pi's real LAN IP for Layer 2 MAC detection.
+  if (cleanHost === '10.0.0.1' && configuredPortalIp !== '10.0.0.1') {
+    const destination = `http://${configuredPortalIp}${req.url || '/'}`;
+    res.writeHead(302, {
+      Location: destination,
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    });
+    res.end();
+    return;
+  }
+
+  // Reverse-proxy directly to the local Next.js portal on 127.0.0.1:${PORTAL_PORT}
+  // while forwarding the client's real IPv4 address for ARP/MAC lookup.
+  const remoteIp = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const proxyHeaders: http.OutgoingHttpHeaders = {
+    ...req.headers,
+    host: hostHeader,
+    'x-forwarded-for': remoteIp || '127.0.0.1',
+    'x-real-ip': remoteIp || '127.0.0.1',
+    'x-forwarded-proto': 'http',
+    'x-forwarded-host': hostHeader,
+  };
+
+  const proxyReq = http.request(
+    {
+      hostname: '127.0.0.1',
+      port: parseInt(PORTAL_PORT, 10) || 3000,
+      path: req.url || '/',
+      method: req.method,
+      headers: proxyHeaders,
+    },
+    (proxyRes) => {
+      const responseHeaders: http.IncomingHttpHeaders = { ...proxyRes.headers };
+      // Strip explicit :${PORTAL_PORT} from upstream Location redirects so URLs stay clean on port 80
+      if (typeof responseHeaders.location === 'string') {
+        responseHeaders.location = responseHeaders.location.replace(
+          new RegExp(`^(http://[^/]+):${PORTAL_PORT}(/|$)`),
+          '$1$2'
+        );
+      }
+      res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+      proxyRes.pipe(res, { end: true });
+    }
+  );
+
+  proxyReq.on('error', (err) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+    }
+    res.end(`Portal upstream unavailable: ${err.message}`);
   });
-  res.end();
+
+  req.pipe(proxyReq, { end: true });
 });
 
 port80Server.on('error', (err: any) => {
   if (err.code === 'EACCES') {
-    console.log('[PORT 80 REDIRECT] Port 80 requires root privileges. Skipping native port 80 listener (dev/non-root mode).');
+    console.log('[PORT 80 PROXY] Port 80 requires root privileges. Skipping native port 80 listener (dev/non-root mode).');
   } else if (err.code === 'EADDRINUSE') {
-    console.log('[PORT 80 REDIRECT] Port 80 is already in use by another service.');
+    console.log('[PORT 80 PROXY] Port 80 is already in use by another service.');
   } else {
-    console.warn('[PORT 80 REDIRECT] Port 80 notice:', err.message);
+    console.warn('[PORT 80 PROXY] Port 80 notice:', err.message);
   }
 });
 
 try {
   port80Server.listen(80, '0.0.0.0', () => {
-    console.log(`[PORT 80 REDIRECT] Native HTTP Port 80 -> :${PORTAL_PORT} redirect server active.`);
+    console.log(`[PORT 80 PROXY] Native HTTP Port 80 -> 127.0.0.1:${PORTAL_PORT} reverse proxy active.`);
   });
 } catch (err: any) {
-  console.warn('[PORT 80 REDIRECT] Could not start port 80 listener:', err.message);
+  console.warn('[PORT 80 PROXY] Could not start port 80 listener:', err.message);
 }
 
 // -------------------------------------------------------------
