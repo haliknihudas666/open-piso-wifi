@@ -99,22 +99,26 @@ export function PortalContent({
     streakDays: number;
   } | null>(null);
 
-  // Direct Layer 2 Safety Redirect: If user opened portal via 10.0.0.1 (which OpenWrt SNATs)
-  // or an external probe host (like conn-service-us-04.allawnos.com), redirect to direct portal IP
+  // Direct Layer 2 Safety Redirect: If user opened portal via 10.0.0.1 shortcut alias
+  // (when OpenWrt SNATs 10.0.0.1 to a different RPi IP) or an external probe host
+  // (like conn-service-us-04.allawnos.com), redirect to direct portal IP
   // so the server accurately detects the client's Layer 2 MAC address!
   React.useEffect(() => {
     if (queryEmbed) return; // Skip redirect if embedded in phone mockup / iframe / instructions!
     if (typeof window !== 'undefined') {
       const hostname = window.location.hostname.toLowerCase();
-      if (
-        hostname === '10.0.0.1' ||
-        (!hostname.includes('192.168.') &&
-          !hostname.includes('10.') &&
-          !hostname.includes('wifi.local') &&
-          !hostname.includes('localhost') &&
-          hostname !== '127.0.0.1')
-      ) {
-        const targetIp = sessionData?.portalIp || '192.168.1.240';
+      const configuredPortalIp = sessionData?.portalIp;
+      const isShortcutAlias =
+        hostname === '10.0.0.1' && Boolean(configuredPortalIp) && configuredPortalIp !== '10.0.0.1';
+      const isExternalProbeHost =
+        !hostname.includes('192.168.') &&
+        !hostname.includes('10.') &&
+        !hostname.includes('wifi.local') &&
+        !hostname.includes('localhost') &&
+        hostname !== '127.0.0.1';
+
+      if (isShortcutAlias || (isExternalProbeHost && Boolean(configuredPortalIp))) {
+        const targetIp = configuredPortalIp || '192.168.1.240';
         const targetPort = sessionData?.portalPort || '3000';
         const targetUrl = targetPort === '80' ? `http://${targetIp}/` : `http://${targetIp}:${targetPort}/`;
         if (window.location.href !== targetUrl) {

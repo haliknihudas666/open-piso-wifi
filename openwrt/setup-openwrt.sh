@@ -148,18 +148,25 @@ if [ -z "$CURRENT_LAN_IP" ]; then
     uci set network.lan.netmask="255.255.255.0"
 fi
 
-# If router primary IP is not 10.0.0.1, add 10.0.0.1 alias so mobile shortcut works natively
-if [ "${ROUTER_IP}" != "10.0.0.1" ]; then
+# If neither router nor RPi owns 10.0.0.1, add 10.0.0.1/32 alias on OpenWrt so the mobile shortcut works natively.
+# Otherwise remove any stale lan_alias10 to prevent an IP conflict when RPi itself is 10.0.0.1.
+if [ "${ROUTER_IP}" != "10.0.0.1" ] && [ "${RPI_IP}" != "10.0.0.1" ]; then
     uci -q delete network.lan_alias10
     uci set network.lan_alias10=alias
     uci set network.lan_alias10.interface='lan'
     uci set network.lan_alias10.proto='static'
     uci set network.lan_alias10.ipaddr='10.0.0.1'
     uci set network.lan_alias10.netmask='255.255.255.255'
+    uci commit network
+    ifup lan_alias10 2>/dev/null || true
+    ip addr add 10.0.0.1/32 dev br-lan 2>/dev/null || true
+else
+    uci -q delete network.lan_alias10
+    uci commit network
+    if [ "${ROUTER_IP}" != "10.0.0.1" ]; then
+        ip addr del 10.0.0.1/32 dev br-lan 2>/dev/null || true
+    fi
 fi
-uci commit network
-ifup lan_alias10 2>/dev/null || true
-ip addr add 10.0.0.1/32 dev br-lan 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # STEP 3: CONFIGURE DHCP, CAPTIVE PORTAL RFC 8908/7710 & LOCAL DNS DOMAIN
@@ -172,6 +179,13 @@ uci set dhcp.@dnsmasq[0].dhcpleasemax='4096'
 # Clear DHCP options 114/160 so mobile devices use standard HTTP probe detection
 # (option 114 expects RFC 8908 JSON API, causing CNA failures when HTML is served)
 uci -q delete dhcp.lan.dhcp_option
+# When 10.0.0.1 is an off-subnet shortcut alias, push RFC 3442 Classless Static Routes
+# (Option 121 + MS Option 249) so mobile devices with Wi-Fi Assist / Mobile Data ON
+# route 10.0.0.1 over Wi-Fi instead of cellular data.
+if [ "${ROUTER_NET_BASE}" != "10.0.0" ] && [ "${RPI_IP}" != "10.0.0.1" ]; then
+    uci add_list dhcp.lan.dhcp_option="121,10.0.0.1/32,${ROUTER_IP},0.0.0.0/0,${ROUTER_IP}"
+    uci add_list dhcp.lan.dhcp_option="249,10.0.0.1/32,${ROUTER_IP},0.0.0.0/0,${ROUTER_IP}"
+fi
 
 # Disable IPv6 RA / DHCPv6 on LAN completely and disable odhcpd
 # to prevent Windows and mobile captive detection hanging on unroutable IPv6 probes (e.g. google.com)
@@ -323,6 +337,29 @@ echo "--> Deploying updated nftables Captive Portal Ruleset..."
 
 rm -f /etc/nftables.d/*piso* /etc/nftables.d/10-pisowifi.nft 2>/dev/null || true
 
+# Build non-duplicate exempt IP set and conditional 10.0.0.1 shortcut rules.
+# When RPi itself is 10.0.0.1 on a 10.0.0.0/24 LAN, clients reach 10.0.0.1 directly at Layer 2
+# (no DNAT or alias needed). Otherwise, DNAT 10.0.0.1:80 to RPi's instant port-80 302 redirector
+# and reject 10.0.0.1:443 with TCP RST / ICMP unreachable so HTTPS-First browsers fall back to HTTP.
+if [ "${RPI_IP}" = "10.0.0.1" ] || [ "${ROUTER_IP}" = "10.0.0.1" ]; then
+    EXEMPT_IPS="${ROUTER_IP}, ${RPI_IP}"
+else
+    EXEMPT_IPS="${ROUTER_IP}, ${RPI_IP}, 10.0.0.1"
+fi
+
+if [ "${RPI_IP}" != "10.0.0.1" ]; then
+    SHORTCUT_PREROUTING="        # Intercept HTTP requests directly addressed to 10.0.0.1 shortcut
+        # Port 80 hits RPi's instant HTTP 302 redirector; portal port forwards directly to Next.js
+        ip daddr 10.0.0.1 tcp dport 80 dnat ip to ${RPI_IP}:80
+        ip daddr 10.0.0.1 tcp dport ${PORTAL_PORT} dnat ip to ${RPI_IP}:${PORTAL_PORT}"
+    SHORTCUT_INPUT="        # Fast-reject HTTPS/QUIC to 10.0.0.1 so modern HTTPS-First browsers immediately fall back to HTTP
+        ip daddr 10.0.0.1 tcp dport 443 reject with tcp reset
+        ip daddr 10.0.0.1 udp dport 443 reject"
+else
+    SHORTCUT_PREROUTING="        # RPi owns 10.0.0.1 directly on LAN — no 10.0.0.1 DNAT needed"
+    SHORTCUT_INPUT="        # RPi owns 10.0.0.1 directly on LAN — no 10.0.0.1 input reject needed"
+fi
+
 cat << EOF > /etc/nftables.piso.nft
 # Ensure clean table recreation without duplicates
 table inet piso_portal
@@ -352,10 +389,7 @@ table inet piso_portal {
         # Allow Raspberry Pi (Paywall Server) outbound traffic without redirect
         ip saddr ${RPI_IP} accept
 
-        # Intercept HTTP requests directly addressed to 10.0.0.1 shortcut
-        # and forward to Raspberry Pi portal! This ensures that ANY connected customer
-        # who types 10.0.0.1 in their mobile browser will immediately land on the portal!
-        ip daddr 10.0.0.1 tcp dport { 80, 3000 } dnat ip to ${RPI_IP}:${PORTAL_PORT}
+${SHORTCUT_PREROUTING}
 
         # Whitelisted VIP MACs bypass redirect
         ether saddr @piso_whitelist accept
@@ -368,7 +402,7 @@ table inet piso_portal {
 
         # Redirect unauthenticated and blacklisted client HTTP (port 80) to Raspberry Pi Portal :${PORTAL_PORT}
         # Intercept external port 80 HTTP requests across all interfaces/SSIDs (br-lan, phy0-ap0, phy1-ap0, wlan0, wlan1)
-        ip daddr != { ${ROUTER_IP}, ${RPI_IP}, 10.0.0.1 } tcp dport 80 dnat ip to ${RPI_IP}:${PORTAL_PORT}
+        ip daddr != { ${EXEMPT_IPS} } tcp dport 80 dnat ip to ${RPI_IP}:${PORTAL_PORT}
 
         # Allow Raspberry Pi other services (SSH, 3000, 4000)
         ip daddr ${RPI_IP} accept
@@ -381,8 +415,8 @@ table inet piso_portal {
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
 
-        # Masquerade traffic redirected to RPi so RPi replies back via OpenWrt
-        ip daddr ${RPI_IP} tcp dport ${PORTAL_PORT} masquerade
+        # Masquerade only DNAT-redirected traffic to RPi so RPi replies back via OpenWrt
+        ct status dnat ip daddr ${RPI_IP} tcp dport { 80, ${PORTAL_PORT} } masquerade
     }
 
     # Filter Input: Allow DHCP/DNS, prevent blacklisted devices from accessing router management
@@ -398,6 +432,8 @@ table inet piso_portal {
         # Allow DNS queries (port 53) so captive portal detection domains resolve for all clients
         udp dport 53 accept
         tcp dport 53 accept
+
+${SHORTCUT_INPUT}
 
         # Drop blacklisted devices from accessing router management services (SSH/HTTP/HTTPS)
         ip daddr ${ROUTER_IP} ether saddr @piso_blacklist tcp dport { 22, 80, 443 } drop
@@ -507,7 +543,9 @@ START=99
 USE_PROCD=0
 
 start() {
-    ip addr add 10.0.0.1/32 dev br-lan 2>/dev/null || true
+    if [ "$(uci -q get network.lan_alias10.ipaddr)" = "10.0.0.1" ]; then
+        ip addr add 10.0.0.1/32 dev br-lan 2>/dev/null || true
+    fi
     nft -f /etc/nftables.piso.nft 2>/dev/null || true
     if [ -f /etc/config/piso_devices ]; then
         for mac in $(uci -q get piso_devices.whitelist.mac); do
