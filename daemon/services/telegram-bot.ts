@@ -11,6 +11,10 @@
  * ==============================================================================
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 export interface TelegramBotConfig {
   token?: string;
   adminChatId?: string;
@@ -42,17 +46,54 @@ export class TelegramBotService {
   private lastUpdateId = 0;
   private statsProvider: MachineStatsProvider | null = null;
   private pollAbortController: AbortController | null = null;
+  private bootNotifTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly configFilePath: string;
 
   constructor(config?: TelegramBotConfig) {
-    this.token = config?.token || process.env.TELEGRAM_BOT_TOKEN || null;
-    this.adminChatId = config?.adminChatId || process.env.TELEGRAM_ADMIN_CHAT_ID || null;
+    this.configFilePath = path.join(process.cwd(), '.telegram-config.json');
+    const saved = this.loadPersistedConfig();
+    this.token = config?.token || saved.token || process.env.TELEGRAM_BOT_TOKEN || null;
+    this.adminChatId = config?.adminChatId || saved.adminChatId || process.env.TELEGRAM_ADMIN_CHAT_ID || null;
+  }
+
+  private loadPersistedConfig(): { token: string | null; adminChatId: string | null } {
+    try {
+      if (fs.existsSync(this.configFilePath)) {
+        const raw = fs.readFileSync(this.configFilePath, 'utf8');
+        const parsed = JSON.parse(raw) as { token?: string; adminChatId?: string };
+        return {
+          token: parsed.token?.trim() || null,
+          adminChatId: parsed.adminChatId?.trim() || null,
+        };
+      }
+    } catch (err: any) {
+      console.warn('[TELEGRAM] Could not read persisted config:', err?.message || err);
+    }
+    return { token: null, adminChatId: null };
+  }
+
+  private persistConfig() {
+    try {
+      const payload = JSON.stringify(
+        {
+          token: this.token || '',
+          adminChatId: this.adminChatId || '',
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      );
+      fs.writeFileSync(this.configFilePath, payload, { mode: 0o600 });
+    } catch (err: any) {
+      console.warn('[TELEGRAM] Could not persist config to disk:', err?.message || err);
+    }
   }
 
   public setStatsProvider(provider: MachineStatsProvider) {
     this.statsProvider = provider;
   }
 
-  public start() {
+  public start(options?: { isBoot?: boolean }) {
     if (!this.token || !this.adminChatId) {
       console.log('[TELEGRAM] ℹ️ Bot credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_ADMIN_CHAT_ID). Running in offline/disabled mode.');
       return;
@@ -62,33 +103,69 @@ export class TelegramBotService {
     this.isPolling = true;
     console.log(`[TELEGRAM] 🚀 Starting long-polling service for admin chat ID: ${this.adminChatId}...`);
 
-    this.sendNotification(
-      '🟢 *OpenPisoWiFi Daemon Online*\n\n' +
-      'System is active and ready.\n' +
-      'Type /help for remote commands.'
-    );
+    const host = os.hostname();
+    const portalIp = process.env.PORTAL_IP || '10.0.0.1';
+    const bootLabel = options?.isBoot ? '🟢 *OpenPisoWiFi Machine Booted & Online*' : '🟢 *OpenPisoWiFi Daemon Online*';
+    const message =
+      `${bootLabel}\n\n` +
+      `• *Host:* \`${host}\`\n` +
+      `• *Portal:* http://${portalIp}/\n` +
+      `• *Status:* Active and ready\n\n` +
+      `Type /help for remote commands.`;
 
+    this.sendBootNotificationWithRetry(message);
     this.pollLoop();
+  }
+
+  /**
+   * Retries delivering the startup/boot notification if the machine booted
+   * before WAN/router internet connectivity became ready (up to ~60s).
+   */
+  private sendBootNotificationWithRetry(markdownText: string, attempt = 1) {
+    if (this.bootNotifTimer) {
+      clearTimeout(this.bootNotifTimer);
+      this.bootNotifTimer = null;
+    }
+    if (!this.isPolling || !this.token || !this.adminChatId) return;
+
+    this.sendNotification(markdownText, { skipDedupe: true }).then((ok) => {
+      if (ok) {
+        console.log(`[TELEGRAM] ✅ Startup notification delivered (attempt ${attempt}).`);
+        return;
+      }
+      if (attempt < 12 && this.isPolling) {
+        console.log(`[TELEGRAM] ⏳ Startup notification deferred (WAN not ready, retry ${attempt}/12 in 5s)...`);
+        this.bootNotifTimer = setTimeout(() => {
+          this.sendBootNotificationWithRetry(markdownText, attempt + 1);
+        }, 5000);
+      }
+    });
   }
 
   public stop() {
     this.isPolling = false;
+    if (this.bootNotifTimer) {
+      clearTimeout(this.bootNotifTimer);
+      this.bootNotifTimer = null;
+    }
     if (this.pollAbortController) {
       this.pollAbortController.abort();
       this.pollAbortController = null;
     }
   }
 
-  public updateConfig(token?: string | null, adminChatId?: string | null) {
+  public updateConfig(token?: string | null, adminChatId?: string | null, options?: { isBoot?: boolean }) {
     if (token !== undefined) this.token = token ? token.trim() : null;
     if (adminChatId !== undefined) this.adminChatId = adminChatId ? adminChatId.trim() : null;
+
+    this.persistConfig();
 
     if (this.isPolling) {
       this.stop();
     }
 
     if (this.token && this.adminChatId) {
-      this.start();
+      this.start({ isBoot: options?.isBoot });
     }
   }
 
@@ -126,14 +203,14 @@ export class TelegramBotService {
 
   public async sendNotification(
     markdownText: string,
-    options?: { dedupeKey?: string; cooldownMs?: number }
+    options?: { dedupeKey?: string; cooldownMs?: number; skipDedupe?: boolean }
   ): Promise<boolean> {
     if (!this.token || !this.adminChatId) return false;
 
     const dedupeKey = options?.dedupeKey || `msg:${markdownText}`;
     const cooldown = options?.cooldownMs ?? 20000; // 20s cooldown for identical messages
 
-    if (this.isDuplicate(dedupeKey, cooldown)) {
+    if (!options?.skipDedupe && this.isDuplicate(dedupeKey, cooldown)) {
       console.log(`[TELEGRAM] ⏳ Suppressed duplicate notification within ${cooldown / 1000}s cooldown.`);
       return false;
     }

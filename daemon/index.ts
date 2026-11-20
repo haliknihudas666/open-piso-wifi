@@ -1363,7 +1363,36 @@ app.listen(PORT, BIND_HOST, () => {
     },
     isWanOnline: () => isWanOnline,
   });
-  telegramBot.start();
+  telegramBot.start({ isBoot: true });
+
+  // Bootstrap fallback: if daemon doesn't have persisted Telegram credentials yet
+  // (e.g. saved in Portal SQLite before this update), pull them from local Portal once ready.
+  if (!telegramBot.getStatus().configured) {
+    const portalPort = process.env.PORTAL_PORT || '3000';
+    const bootstrapTelegramFromPortal = async (attempt = 1) => {
+      if (telegramBot.getStatus().configured) return;
+      try {
+        const res = await fetch(`http://127.0.0.1:${portalPort}/api/telegram/config`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { token?: string; adminChatId?: string };
+          if (data.token && data.adminChatId) {
+            console.log('[TELEGRAM] 🔄 Loaded saved Telegram credentials from Portal database on boot.');
+            telegramBot.updateConfig(data.token, data.adminChatId, { isBoot: true });
+            return;
+          }
+        }
+      } catch {
+        // Portal may still be starting up right after boot
+      }
+      if (attempt < 15 && !telegramBot.getStatus().configured) {
+        setTimeout(() => bootstrapTelegramFromPortal(attempt + 1), 3000);
+      }
+    };
+    setTimeout(() => bootstrapTelegramFromPortal(1), 2000);
+  }
 
   // Periodic Heartbeat Sync to Supabase (every 60s)
   setInterval(() => {

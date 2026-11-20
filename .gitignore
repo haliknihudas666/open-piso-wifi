@@ -25,6 +25,7 @@ firmware/**/bin/
 .env.test.local
 .env.production.local
 !.env.example
+.telegram-config.json
 
 # Logs
 npm-debug.log*
