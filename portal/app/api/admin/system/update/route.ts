@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { prisma, ensureSqlitePragmas } from '@/lib/prisma';
 import { syncDaemonDeviceRules } from '@/lib/daemon';
@@ -15,15 +17,51 @@ interface UpdateState {
   completedAt?: string;
 }
 
+const UPDATE_STATE_FILE = path.join(os.tmpdir(), 'openpiso-update-state.json');
+
 let globalUpdateState: UpdateState = {
   status: 'idle',
   logs: [],
 };
 
+function persistUpdateState() {
+  try {
+    fs.writeFileSync(/*turbopackIgnore: true*/ UPDATE_STATE_FILE, JSON.stringify(globalUpdateState), 'utf8');
+  } catch {}
+}
+
+function loadPersistedUpdateState(): UpdateState {
+  if (globalUpdateState.status !== 'idle' || globalUpdateState.logs.length > 0) {
+    return globalUpdateState;
+  }
+  try {
+    if (fs.existsSync(/*turbopackIgnore: true*/ UPDATE_STATE_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(/*turbopackIgnore: true*/ UPDATE_STATE_FILE, 'utf8')) as UpdateState;
+      if (parsed && Array.isArray(parsed.logs)) {
+        globalUpdateState = parsed;
+      }
+    }
+  } catch {}
+  return globalUpdateState;
+}
+
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdmin(request);
   if (unauthorized) return unauthorized;
 
+  return NextResponse.json(loadPersistedUpdateState());
+}
+
+export async function DELETE(request: NextRequest) {
+  const unauthorized = await requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
+  globalUpdateState = { status: 'idle', logs: [] };
+  try {
+    if (fs.existsSync(/*turbopackIgnore: true*/ UPDATE_STATE_FILE)) {
+      fs.unlinkSync(/*turbopackIgnore: true*/ UPDATE_STATE_FILE);
+    }
+  } catch {}
   return NextResponse.json(globalUpdateState);
 }
 
@@ -53,6 +91,7 @@ export async function POST(req: NextRequest) {
     logs: [`[${new Date().toLocaleTimeString()}] Initializing OpenPisoWiFi High-Speed Pre-Built Update...`],
     startedAt: new Date().toISOString(),
   };
+  persistUpdateState();
 
   const addLog = (text: string) => {
     const lines = text.split('\n');
@@ -66,6 +105,7 @@ export async function POST(req: NextRequest) {
     if (globalUpdateState.logs.length > 200) {
       globalUpdateState.logs = globalUpdateState.logs.slice(-200);
     }
+    persistUpdateState();
   };
 
   if (!isLinux) {
@@ -96,11 +136,32 @@ export async function POST(req: NextRequest) {
 
   // Production on Raspberry Pi / Linux SBC
   try {
-    const args = [updateScript];
-    if (isForce) args.push('--force');
+    const scriptArgs = [updateScript];
+    if (isForce) scriptArgs.push('--force');
 
-    addLog(`--> Spawning update script: ${updateScript} ${isForce ? '--force' : ''}`);
-    const proc = spawn('bash', args, {
+    let spawnCmd = 'bash';
+    let spawnArgs = scriptArgs;
+
+    if (process.getuid?.() !== 0) {
+      for (const bashBin of ['/bin/bash', '/usr/bin/bash']) {
+        try {
+          execFileSync('sudo', ['-n', '-l', bashBin, updateScript], { stdio: 'ignore', timeout: 2000 });
+          spawnCmd = 'sudo';
+          spawnArgs = ['-n', bashBin, ...scriptArgs];
+          break;
+        } catch {}
+      }
+      if (spawnCmd === 'bash') {
+        try {
+          execFileSync('sudo', ['-n', '-l', updateScript], { stdio: 'ignore', timeout: 2000 });
+          spawnCmd = 'sudo';
+          spawnArgs = ['-n', ...scriptArgs];
+        } catch {}
+      }
+    }
+
+    addLog(`--> Spawning update script (${spawnCmd === 'sudo' ? 'root' : 'user'}): ${updateScript} ${isForce ? '--force' : ''}`);
+    const proc = spawn(spawnCmd, spawnArgs, {
       cwd: rootDir,
       env: { ...process.env, PATH: process.env.PATH },
     });
@@ -136,6 +197,7 @@ export async function POST(req: NextRequest) {
         globalUpdateState.error = `Exit code ${code}`;
       }
       globalUpdateState.completedAt = new Date().toISOString();
+      persistUpdateState();
     });
 
     proc.on('error', (err) => {
@@ -143,6 +205,7 @@ export async function POST(req: NextRequest) {
       globalUpdateState.status = 'error';
       globalUpdateState.error = err.message;
       globalUpdateState.completedAt = new Date().toISOString();
+      persistUpdateState();
     });
 
     return NextResponse.json({ success: true, message: 'System update started', state: globalUpdateState });

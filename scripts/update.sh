@@ -687,6 +687,11 @@ echo ""
 echo -e "${PURPLE}[6/6] Updating systemd services & restarting background daemons...${NC}"
 
 if [ "$EUID" -eq 0 ]; then
+    # Ensure least-privilege sudoers rules stay up to date for Web UI updates
+    if [ -f "$ROOT_DIR/scripts/setup-sudoers.sh" ]; then
+        SUDO_USER="$CURRENT_USER" bash "$ROOT_DIR/scripts/setup-sudoers.sh" >/dev/null 2>&1 || true
+    fi
+
     # Remove legacy iptables port 80 -> 3000 REDIRECT rules so Daemon port80Server handles port 80
     for RPORT in "${PORTAL_PORT}" 3000; do
         while iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "${RPORT}" 2>/dev/null; do

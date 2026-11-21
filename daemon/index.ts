@@ -4,7 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   RouterController,
@@ -2564,6 +2564,59 @@ export async function startDaemon(): Promise<void> {
       }
     }, 10000);
   });
+
+/**
+ * Removes legacy iptables port 80 -> 3000 REDIRECT rules (and stale systemd ExecStartPre lines)
+ * so daemon port80Server can receive port 80 traffic and sign trusted x-real-ip headers.
+ */
+function cleanupLegacyPort80IptablesRedirects(): void {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0) return;
+
+  const ports = Array.from(new Set([String(parseInt(PORTAL_PORT, 10) || 3000), '3000']));
+  let removedCount = 0;
+
+  for (const rPort of ports) {
+    const specs: string[][] = [
+      ['-t', 'nat', '-D', 'PREROUTING', '-p', 'tcp', '--dport', '80', '-j', 'REDIRECT', '--to-port', rPort],
+      ['-t', 'nat', '-D', 'OUTPUT', '-p', 'tcp', '-o', 'lo', '--dport', '80', '-j', 'REDIRECT', '--to-port', rPort],
+    ];
+    for (const args of specs) {
+      for (let i = 0; i < 500; i++) {
+        try {
+          execFileSync('iptables', args, { stdio: 'ignore', timeout: 2000 });
+          removedCount++;
+        } catch {
+          break;
+        }
+      }
+    }
+  }
+
+  if (removedCount > 0) {
+    console.log(`[PORT 80 PROXY] Cleaned up ${removedCount} legacy iptables 80 -> ${PORTAL_PORT} REDIRECT rule(s).`);
+    try {
+      execFileSync('netfilter-persistent', ['save'], { stdio: 'ignore', timeout: 5000 });
+    } catch {}
+  }
+
+  const unitPath = '/etc/systemd/system/pisowifi-daemon.service';
+  try {
+    if (fs.existsSync(unitPath)) {
+      const unitText = fs.readFileSync(unitPath, 'utf8');
+      const lines = unitText.split('\n');
+      const filtered = lines.filter((line) => !/ExecStartPre=.*iptables.*--dport\s+80.*REDIRECT/i.test(line));
+      if (filtered.length !== lines.length) {
+        fs.writeFileSync(unitPath, filtered.join('\n'), 'utf8');
+        console.log('[PORT 80 PROXY] Removed legacy iptables ExecStartPre lines from pisowifi-daemon.service.');
+        try {
+          execFileSync('systemctl', ['daemon-reload'], { stdio: 'ignore', timeout: 5000 });
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+  cleanupLegacyPort80IptablesRedirects();
 
   try {
     port80Server.listen(80, '0.0.0.0', () => {

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { GitBranch, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Sparkles, ChevronDown, ChevronUp, ShieldCheck, Globe, Cpu, Box } from 'lucide-react';
+import { GitBranch, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Sparkles, ChevronDown, ChevronUp, ShieldCheck, Globe, Cpu, Box, Trash2 } from 'lucide-react';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -25,9 +25,36 @@ export function SystemUpdateCard() {
   const [triggerType, setTriggerType] = useState<'normal' | 'force' | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showChangelog, setShowChangelog] = useState(false);
+  const [cachedLogs, setCachedLogs] = useState<string[]>([]);
+  const [cachedStatus, setCachedStatus] = useState<string>('idle');
 
-  const isUpdating = updateState?.status === 'updating';
+  const isUpdating = (updateState?.status || cachedStatus) === 'updating';
   const hasUpdate = !!versionData?.updateAvailable;
+
+  useEffect(() => {
+    if (Array.isArray(updateState?.logs) && updateState.logs.length > 0) {
+      setCachedLogs(updateState.logs);
+    }
+    if (updateState?.status && (updateState.status !== 'idle' || updateState.logs?.length > 0)) {
+      setCachedStatus(updateState.status);
+    }
+  }, [updateState]);
+
+  const handleClearConsole = async () => {
+    setCachedLogs([]);
+    setCachedStatus('idle');
+    try {
+      await fetch('/api/admin/system/update', { method: 'DELETE' });
+      mutateUpdateState();
+    } catch {}
+  };
+
+  const displayedLogs: string[] =
+    Array.isArray(updateState?.logs) && updateState.logs.length > 0 ? updateState.logs : cachedLogs;
+  const displayedStatus: string =
+    updateState?.status && (updateState.status !== 'idle' || (updateState.logs?.length ?? 0) > 0)
+      ? updateState.status
+      : cachedStatus;
 
   const handleTriggerUpdate = async (force: boolean = false) => {
     const confirmPrompt = force
@@ -283,16 +310,27 @@ export function SystemUpdateCard() {
             <Terminal className="w-3.5 h-3.5 text-black dark:text-[#ffe17c]" />
             Live Update Console
           </span>
-          {updateState?.status && (
+          <div className="flex items-center gap-2">
+            {displayedLogs.length > 0 && !isUpdating && (
+              <button
+                type="button"
+                onClick={handleClearConsole}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-black bg-white dark:bg-[#1a231d] text-[10px] font-bold text-black dark:text-[#b7c6c2] hover:bg-neutral-100 cursor-pointer"
+                title="Clear console logs"
+              >
+                <Trash2 className="w-3 h-3" />
+                Clear
+              </button>
+            )}
             <span className="text-[11px] uppercase tracking-wider font-mono font-black text-neutral-700 dark:text-[#b7c6c2]">
-              Status: <span className="text-black dark:text-[#ffe17c]">{updateState.status}</span>
+              Status: <span className="text-black dark:text-[#ffe17c]">{displayedStatus}</span>
             </span>
-          )}
+          </div>
         </div>
 
         <div className="p-3.5 rounded-xl bg-black border-2 border-black dark:border-[#4a6052] shadow-neo-sm font-mono text-[11px] text-[#4ade80] h-44 overflow-y-auto space-y-1">
-          {updateState?.logs && updateState.logs.length > 0 ? (
-            updateState.logs.map((log: string, idx: number) => (
+          {displayedLogs.length > 0 ? (
+            displayedLogs.map((log: string, idx: number) => (
               <div key={idx} className="leading-relaxed">
                 {log}
               </div>
