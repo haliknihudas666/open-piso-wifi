@@ -1,8 +1,52 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 const DAEMON_URL = process.env.DAEMON_URL || 'http://127.0.0.1:4000';
+
+let cachedSharedSecret: string | null = null;
+let cachedSharedSecretAt = 0;
+
+/**
+ * Resolves DAEMON_API_SECRET from process.env, falling back to sibling daemon/.env
+ * if portal/.env wasn't updated yet (e.g. manual git pull).
+ */
+export function getSharedDaemonSecret(): string {
+  const envSecret = process.env.DAEMON_API_SECRET?.trim();
+  if (envSecret) return envSecret;
+
+  const now = Date.now();
+  if (cachedSharedSecret !== null && now - cachedSharedSecretAt < 30_000) {
+    return cachedSharedSecret;
+  }
+
+  const candidates = [
+    path.resolve(process.cwd(), '..', 'daemon', '.env'),
+    path.resolve(process.cwd(), '..', 'pisowifi-daemon', '.env'),
+  ];
+  for (const envPath of candidates) {
+    try {
+      if (!fs.existsSync(/*turbopackIgnore: true*/ envPath)) continue;
+      const content = fs.readFileSync(/*turbopackIgnore: true*/ envPath, 'utf8');
+      const match = content.match(/^DAEMON_API_SECRET=(.+)$/m);
+      if (match && match[1]) {
+        const val = match[1].trim().replace(/^["']|["']$/g, '');
+        if (val) {
+          cachedSharedSecret = val;
+          cachedSharedSecretAt = now;
+          return val;
+        }
+      }
+    } catch {}
+  }
+
+  cachedSharedSecret = '';
+  cachedSharedSecretAt = now;
+  return '';
+}
 
 export function daemonHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...(extra || {}) };
-  const secret = process.env.DAEMON_API_SECRET?.trim();
+  const secret = getSharedDaemonSecret();
   if (secret) {
     headers['x-daemon-secret'] = secret;
   }

@@ -154,7 +154,22 @@ export async function getMacFromIp(ip: string, explicitMacHint?: string | null):
     // Continue to next fallback
   }
 
-  // 5. Windows Development `arp -a <ip>` fallback (execFile, no shell)
+  // 5. Local dnsmasq / DHCP lease files (for Standalone Pi Gateway when ARP ages out)
+  const leaseFiles = ['/var/lib/misc/dnsmasq.leases', '/tmp/dnsmasq.leases', '/tmp/dhcp.leases'];
+  for (const leaseFile of leaseFiles) {
+    try {
+      if (!fs.existsSync(/*turbopackIgnore: true*/ leaseFile)) continue;
+      const lines = fs.readFileSync(/*turbopackIgnore: true*/ leaseFile, 'utf-8').split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 3 && parts[2] === cleanIp && isValidMac(parts[1])) {
+          return normalizeMac(parts[1]);
+        }
+      }
+    } catch {}
+  }
+
+  // 6. Windows Development `arp -a <ip>` fallback (execFile, no shell)
   try {
     const { stdout } = await execFileAsync('arp', ['-a', cleanIp], { timeout: 2000 });
     const match = stdout.match(/([0-9a-f]{2}(?:-[0-9a-f]{2}){5})/i);

@@ -60,3 +60,39 @@ export function formatRemainingTime(totalSeconds: number): string {
 export function formatCurrency(amount: number): string {
   return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
+
+/**
+ * Copies text to the clipboard with an execCommand textarea fallback for non-HTTPS
+ * captive portal origins (e.g. http://10.0.0.1, http://192.168.1.240, http://wifi.local).
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text || typeof document === 'undefined') return false;
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof window !== 'undefined' && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to legacy textarea copy
+    }
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  } catch {
+    return false;
+  }
+}

@@ -14,7 +14,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
-import { formatDuration } from '@/lib/utils';
+import { copyTextToClipboard, formatDuration } from '@/lib/utils';
 import { LoyaltyCustomerStatus, LoyaltyMilestone } from '@/lib/loyalty';
 import { RewindShareModal } from '@/components/shared/RewindShareModal';
 import { usePortalLanguage } from '@/lib/portal-i18n';
@@ -48,12 +48,14 @@ export function LoyaltyStreakCard({
   const nextMilestone = loyalty?.nextMilestone;
   const allMilestones = loyalty?.allMilestones || [];
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!effectiveCode) return;
-    navigator.clipboard?.writeText(effectiveCode).catch(() => { });
-    setCopied(true);
-    if (onCodeCopied) onCodeCopied();
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyTextToClipboard(effectiveCode);
+    if (ok) {
+      setCopied(true);
+      if (onCodeCopied) onCodeCopied();
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   // Calculate progress percent to next milestone

@@ -30,8 +30,11 @@ BCM_TO_PHYSICAL = {
     20: 38, 21: 40,
 }
 
-MIN_PULSE_WIDTH_MS = 12.0
-MAX_PULSE_WIDTH_MS = 400.0
+MIN_PULSE_WIDTH_MS = 8.0
+MAX_PULSE_WIDTH_MS = 650.0
+INHIBIT_BLANKING_SEC = 0.25
+ESD_BURST_WINDOW_SEC = 2.0
+ESD_BURST_THRESHOLD = 8
 BUTTON_DEBOUNCE_SEC = 1.0
 
 io_lock = threading.Lock()
@@ -78,10 +81,21 @@ class PulseTracker:
         self.lock = threading.Lock()
         self.pulse_start = None
         self.stuck_reported = False
+        self.blank_until = 0.0
+        self.short_spikes = []
+
+    def notify_inhibit_change(self, now=None):
+        ts = now if now is not None else time.monotonic()
+        with self.lock:
+            self.blank_until = ts + INHIBIT_BLANKING_SEC
+            self.pulse_start = None
+            self.stuck_reported = False
 
     def on_falling(self, now=None):
         ts = now if now is not None else time.monotonic()
         with self.lock:
+            if ts < self.blank_until:
+                return
             if self.pulse_start is None:
                 self.pulse_start = ts
                 self.stuck_reported = False
@@ -97,13 +111,18 @@ class PulseTracker:
             was_stuck = self.stuck_reported
             self.pulse_start = None
             self.stuck_reported = False
-            if was_stuck:
+            if ts < self.blank_until or was_stuck:
                 return
             if width_ms < MIN_PULSE_WIDTH_MS:
-                action = "esd"
+                self.short_spikes = [t for t in self.short_spikes if (ts - t) <= ESD_BURST_WINDOW_SEC]
+                self.short_spikes.append(ts)
+                if len(self.short_spikes) >= ESD_BURST_THRESHOLD:
+                    self.short_spikes = []
+                    action = "esd"
             elif width_ms > MAX_PULSE_WIDTH_MS:
                 action = "stuck"
             else:
+                self.short_spikes = []
                 action = "valid"
 
         if action == "esd":
@@ -165,8 +184,8 @@ class GpioZeroDriver:
         )
         self.inhibit.value = initial_inhibit
 
-        # Use bounce_time=None so software pulse tracker measures sub-12ms ESD spikes accurately
-        self.coin = Button(coin_bcm, pull_up=True, bounce_time=None)
+        # 4ms debounce filters sub-4ms contact chatter/EMI without dropping 20-150ms coin pulses
+        self.coin = Button(coin_bcm, pull_up=True, bounce_time=0.004)
         self.coin.when_pressed = lambda: tracker.on_falling()
         self.coin.when_released = lambda: tracker.on_rising()
 
@@ -605,10 +624,12 @@ def main():
 
         if cmd == "enable":
             target_val = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else (0 if inhibit_active_high else 1)
+            tracker.notify_inhibit_change()
             driver.set_inhibit(target_val)
             emit_json({"event": "inhibit", "state": "enabled", "level": driver.get_inhibit()})
         elif cmd in ("disable", "block"):
             target_val = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else (1 if inhibit_active_high else 0)
+            tracker.notify_inhibit_change()
             driver.set_inhibit(target_val)
             emit_json({"event": "inhibit", "state": "blocked", "level": driver.get_inhibit()})
         elif cmd == "set_mode":

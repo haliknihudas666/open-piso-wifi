@@ -726,6 +726,7 @@ let bridgeProcess: ChildProcess | null = null;
 let trainPulses: number[] = [];
 let trainTimer: ReturnType<typeof setTimeout> | null = null;
 let inhibitedPulseTimestamps: number[] = [];
+let esdSpikeTimestamps: number[] = [];
 const TAMPER_WINDOW_MS = 10_000;
 const TAMPER_THRESHOLD = 3;
 
@@ -743,6 +744,7 @@ export function resetCoinStateForTest(options?: { enabled?: boolean; pulseMultip
   coinSlotEnabled = options?.enabled ?? false;
   activePulseMultiplier = options?.pulseMultiplier ?? 1;
   inhibitedPulseTimestamps = [];
+  esdSpikeTimestamps = [];
   trainPulses = [];
   if (trainTimer) {
     clearTimeout(trainTimer);
@@ -994,13 +996,22 @@ function tryInitPythonBridge(
               } else if (msg.event === 'tamper') {
                 const reason = msg.reason || 'abnormal_pulse';
                 const widthMs = typeof msg.widthMs === 'number' ? msg.widthMs : undefined;
-                logCoinEvent({ timestamp: Date.now(), type: 'tamper', bcmPin: coinBcm, reason, widthMs });
+                const now = Date.now();
+                logCoinEvent({ timestamp: now, type: 'tamper', bcmPin: coinBcm, reason, widthMs });
                 const alertMsg = `Hardware tamper on BCM ${coinBcm}: ${reason}${widthMs !== undefined ? ` (${widthMs}ms)` : ''}`;
                 if (reason === 'stuck_low') {
                   recordShieldAlert({ type: 'coin_tamper', severity: 'high', message: alertMsg });
                   void telegramBot.notifySecurityAlert('coin_tamper', 'high', { message: alertMsg, reason, widthMs, bcmPin: coinBcm });
                 } else {
-                  recordBlockedPulseTamper(coinBcm, Date.now(), `GPIO-${reason}`);
+                  esdSpikeTimestamps = esdSpikeTimestamps.filter((ts) => now - ts <= TAMPER_WINDOW_MS);
+                  esdSpikeTimestamps.push(now);
+                  console.warn(`[TAMPER GUARD] Rejected ${reason} on BCM ${coinBcm}${widthMs !== undefined ? ` (${widthMs}ms)` : ''} (${esdSpikeTimestamps.length}/${TAMPER_THRESHOLD} in 10s).`);
+                  if (esdSpikeTimestamps.length >= TAMPER_THRESHOLD) {
+                    const count = esdSpikeTimestamps.length;
+                    esdSpikeTimestamps = [];
+                    recordShieldAlert({ type: 'coin_tamper', severity: 'high', count, message: alertMsg });
+                    void telegramBot.notifySecurityAlert('coin_tamper', 'high', { message: alertMsg, reason, widthMs, bcmPin: coinBcm, count });
+                  }
                 }
               } else if (msg.status === 'error') {
                 lastGpioError = `Python bridge error: ${msg.error}`;

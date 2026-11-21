@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { cleanIpv4 } from './arp';
+import { getSharedDaemonSecret } from './daemon';
 
 function timingSafeEqualHex(a: string, b: string): boolean {
   const normA = a.trim().toLowerCase();
@@ -25,7 +26,7 @@ function timingSafeEqualHex(a: string, b: string): boolean {
  *   and `127.0.0.1`.
  */
 export function getTrustedClientIp(request: Pick<NextRequest, 'headers'>): string {
-  const secret = process.env.DAEMON_API_SECRET?.trim() || '';
+  const secret = getSharedDaemonSecret();
   const rawRealIp = request.headers.get('x-real-ip')?.trim() || '';
   const cleanRealIp = cleanIpv4(rawRealIp);
   const proxyAuth = request.headers.get('x-proxy-auth')?.trim() || '';
@@ -48,12 +49,13 @@ export function getTrustedClientIp(request: Pick<NextRequest, 'headers'>): strin
     }
 
     if (process.env.NODE_ENV === 'production') {
+      console.warn('[client-ip] x-proxy-auth HMAC mismatch — check DAEMON_API_SECRET in portal/.env vs daemon/.env');
       return '127.0.0.1';
     }
   }
 
   if (process.env.NODE_ENV === 'production') {
-    if (!proxyAuth && cleanRealIp) {
+    if ((!proxyAuth || !secret) && cleanRealIp) {
       return cleanRealIp;
     }
     return '127.0.0.1';

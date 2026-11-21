@@ -5,7 +5,7 @@ import { Wifi, Clock, CheckCircle2, Pause, Play, Crown, AlertCircle, RefreshCw, 
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { formatRemainingTime } from '@/lib/utils';
+import { copyTextToClipboard, formatRemainingTime } from '@/lib/utils';
 import { usePortalLanguage } from '@/lib/portal-i18n';
 
 interface ActiveSessionCardProps {
@@ -37,11 +37,13 @@ export function ActiveSessionCard({
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
     if (transferCode) {
-      navigator.clipboard?.writeText(transferCode).catch(() => {});
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2500);
+      const ok = await copyTextToClipboard(transferCode);
+      if (ok) {
+        setCopiedCode(true);
+        setTimeout(() => setCopiedCode(false), 2500);
+      }
     }
   };
 
