@@ -41,6 +41,22 @@ export interface MachineStatsProvider {
   };
 }
 
+export interface TunnelStatusSummary {
+  installed: boolean;
+  running: boolean;
+  enabled: boolean;
+  mode: 'quick' | 'named';
+  publicUrl: string | null;
+  lastError: string | null;
+}
+
+export interface TunnelControllerProvider {
+  getStatus: () => TunnelStatusSummary;
+  start: () => Promise<TunnelStatusSummary>;
+  stop: () => Promise<TunnelStatusSummary>;
+  restart: () => Promise<TunnelStatusSummary>;
+}
+
 function escapeTelegramMarkdown(text: string): string {
   return text.replace(/([_*`\[])/g, '\\$1');
 }
@@ -62,8 +78,11 @@ export class TelegramBotService {
   private isPolling = false;
   private lastUpdateId = 0;
   private statsProvider: MachineStatsProvider | null = null;
+  private tunnelController: TunnelControllerProvider | null = null;
   private pollAbortController: AbortController | null = null;
   private bootNotifTimer: ReturnType<typeof setTimeout> | null = null;
+  private tunnelNotifTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingTunnelNotification: { url: string; mode: 'quick' | 'named' } | null = null;
   private readonly configFilePath: string;
 
   constructor(config?: TelegramBotConfig) {
@@ -110,6 +129,44 @@ export class TelegramBotService {
     this.statsProvider = provider;
   }
 
+  public setTunnelController(controller: TunnelControllerProvider) {
+    this.tunnelController = controller;
+  }
+
+  public async notifyTunnelUrl(url: string, mode: 'quick' | 'named', attempt = 1) {
+    if (this.tunnelNotifTimer) {
+      clearTimeout(this.tunnelNotifTimer);
+      this.tunnelNotifTimer = null;
+    }
+
+    if (!this.token || !this.adminChatId || !this.isPolling) {
+      this.pendingTunnelNotification = { url, mode };
+      return;
+    }
+
+    this.pendingTunnelNotification = null;
+    const cleanUrl = url.replace(/\/+$/, '');
+    const adminUrl = `${cleanUrl}/admin`;
+    const modeLabel = mode === 'named' ? 'Named Tunnel' : 'Quick Tunnel (trycloudflare.com)';
+    const msg =
+      `🌐 *Remote Admin Tunnel Ready*\n\n` +
+      `• *Mode:* ${modeLabel}\n` +
+      `• *Admin Panel:* ${adminUrl}\n\n` +
+      `🔒 Protected by your Admin PIN. Captive portal & coin APIs are blocked over the tunnel.`;
+
+    const ok = await this.sendNotification(msg, { skipDedupe: true });
+    if (ok) {
+      console.log(`[TELEGRAM] ✅ Tunnel URL notification delivered (attempt ${attempt}).`);
+      return;
+    }
+
+    if (attempt < 8 && this.isPolling) {
+      this.tunnelNotifTimer = setTimeout(() => {
+        void this.notifyTunnelUrl(url, mode, attempt + 1);
+      }, 5000);
+    }
+  }
+
   public start(options?: { isBoot?: boolean }) {
     if (!this.token || !this.adminChatId) {
       console.log('[TELEGRAM] ℹ️ Bot credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_ADMIN_CHAT_ID). Running in offline/disabled mode.');
@@ -131,6 +188,11 @@ export class TelegramBotService {
       `Type /help for remote commands.`;
 
     this.sendBootNotificationWithRetry(message);
+    if (this.pendingTunnelNotification) {
+      const pending = this.pendingTunnelNotification;
+      this.pendingTunnelNotification = null;
+      void this.notifyTunnelUrl(pending.url, pending.mode);
+    }
     this.pollLoop();
   }
 
@@ -142,6 +204,10 @@ export class TelegramBotService {
     if (this.bootNotifTimer) {
       clearTimeout(this.bootNotifTimer);
       this.bootNotifTimer = null;
+    }
+    if (this.tunnelNotifTimer) {
+      clearTimeout(this.tunnelNotifTimer);
+      this.tunnelNotifTimer = null;
     }
     if (!this.isPolling || !this.token || !this.adminChatId) return;
 
@@ -164,6 +230,10 @@ export class TelegramBotService {
     if (this.bootNotifTimer) {
       clearTimeout(this.bootNotifTimer);
       this.bootNotifTimer = null;
+    }
+    if (this.tunnelNotifTimer) {
+      clearTimeout(this.tunnelNotifTimer);
+      this.tunnelNotifTimer = null;
     }
     if (this.pollAbortController) {
       this.pollAbortController.abort();
@@ -451,6 +521,12 @@ export class TelegramBotService {
         await this.handleShieldCommand();
         break;
 
+      case '/tunnel': {
+        const arg = (text.split(/\s+/)[1] || '').toLowerCase();
+        await this.handleTunnelCommand(arg);
+        break;
+      }
+
       default:
         // Ignore non-command messages
         break;
@@ -465,6 +541,7 @@ export class TelegramBotService {
       '• `/emptybox` — Reset cash box counter after collecting\n' +
       '• `/wan` — Check live internet connectivity status\n' +
       '• `/shield` — Check OpenPiso Shield & security alerts\n' +
+      '• `/tunnel` — View or control Cloudflare Remote Admin Tunnel (`start|stop|restart`)\n' +
       '• `/help` — Display this command menu';
     await this.sendNotification(msg);
   }
@@ -553,6 +630,56 @@ export class TelegramBotService {
       }
     }
 
+    await this.sendNotification(msg, { skipDedupe: true });
+  }
+
+  private async handleTunnelCommand(arg: string) {
+    if (!this.tunnelController) {
+      await this.sendNotification('🌐 *Cloudflare Tunnel:* Service not initialized.');
+      return;
+    }
+
+    if (arg === 'start') {
+      const st = await this.tunnelController.start();
+      if (!st.installed) {
+        await this.sendNotification('⚠️ `cloudflared` binary is not installed on this machine.');
+        return;
+      }
+      await this.sendNotification(
+        st.publicUrl
+          ? `🟢 *Tunnel Started*\n• *Admin Panel:* ${st.publicUrl.replace(/\/+$/, '')}/admin`
+          : '⏳ *Cloudflare Tunnel starting...* You will receive the Admin URL shortly.'
+      );
+      return;
+    }
+
+    if (arg === 'stop') {
+      await this.tunnelController.stop();
+      await this.sendNotification('🛑 *Cloudflare Tunnel stopped.*');
+      return;
+    }
+
+    if (arg === 'restart') {
+      await this.tunnelController.restart();
+      await this.sendNotification('🔄 *Cloudflare Tunnel restarting...* A new URL will be sent shortly.');
+      return;
+    }
+
+    const st = this.tunnelController.getStatus();
+    const stateLabel = !st.installed
+      ? '⚠️ Not Installed (`cloudflared` missing)'
+      : st.running
+        ? '🟢 Running'
+        : '🔴 Stopped';
+    const adminUrl = st.publicUrl ? `${st.publicUrl.replace(/\/+$/, '')}/admin` : 'Not available yet';
+    const msg =
+      `🌐 *Cloudflare Tunnel Status*\n\n` +
+      `• *Status:* ${stateLabel}\n` +
+      `• *Mode:* ${st.mode === 'named' ? 'Named Tunnel' : 'Quick Tunnel (trycloudflare.com)'}\n` +
+      `• *Auto-start:* ${st.enabled ? 'Enabled' : 'Disabled'}\n` +
+      `• *Admin URL:* ${adminUrl}\n` +
+      (st.lastError ? `• *Last Error:* ${escapeTelegramMarkdown(st.lastError)}\n` : '') +
+      `\nCommands: \`/tunnel start\`, \`/tunnel stop\`, \`/tunnel restart\``;
     await this.sendNotification(msg, { skipDedupe: true });
   }
 }

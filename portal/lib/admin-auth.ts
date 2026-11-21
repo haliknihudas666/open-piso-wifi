@@ -204,6 +204,22 @@ export async function requireAdmin(req: NextRequest): Promise<NextResponse | nul
 }
 
 /**
+ * Detects whether a request arrived through a Cloudflare Tunnel (Quick or Named).
+ */
+export function isCloudflareTunnelRequest(req: Pick<NextRequest, 'headers'>): boolean {
+  const cfRay = req.headers.get('cf-ray')?.trim();
+  const cfConnectingIp = req.headers.get('cf-connecting-ip')?.trim();
+  const host = (req.headers.get('x-forwarded-host') || req.headers.get('host') || '')
+    .split(':')[0]
+    .trim()
+    .toLowerCase();
+
+  if (cfRay || cfConnectingIp) return true;
+  if (host.endsWith('.trycloudflare.com')) return true;
+  return false;
+}
+
+/**
  * Verifies whether a request originates from the trusted local hardware daemon.
  * - When DAEMON_API_SECRET is configured: checks 'x-daemon-secret' with crypto.timingSafeEqual.
  * - When DAEMON_API_SECRET is unset: requires loopback x-real-ip / host or non-production dev mode.
@@ -214,6 +230,11 @@ export function isInternalDaemonRequest(req: Pick<NextRequest, 'headers'>): bool
 
   if (secret) {
     return timingSafeEqualString(provided, secret);
+  }
+
+  // Never treat traffic arriving via Cloudflare Tunnel as an internal daemon request
+  if (isCloudflareTunnelRequest(req)) {
+    return false;
   }
 
   const isLoopback = (value: string): boolean => {

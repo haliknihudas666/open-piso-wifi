@@ -15,7 +15,7 @@ import {
   RateTier,
 } from '@/lib/rates';
 import { getTrustedClientIp } from '@/lib/client-ip';
-import { isAdminRequest } from '@/lib/admin-auth';
+import { isAdminRequest, isCloudflareTunnelRequest } from '@/lib/admin-auth';
 import {
   getActiveLock,
   isClientLockHolder,
@@ -54,6 +54,9 @@ let settingsCacheExpiry = 0;
  * Polled by frontend every 200ms when active for realtime coin counting.
  */
 export async function GET(request: NextRequest) {
+  if (isCloudflareTunnelRequest(request) && !(await isAdminRequest(request))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   await ensureSqlitePragmas();
 
   const clientIp = getTrustedClientIp(request);
@@ -234,6 +237,9 @@ export async function GET(request: NextRequest) {
  * - action: 'clear' -> clears pending coins (requires admin)
  */
 export async function POST(request: NextRequest) {
+  if (isCloudflareTunnelRequest(request) && !(await isAdminRequest(request))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   await ensureSqlitePragmas();
 
   const body = await request.json().catch(() => ({}));

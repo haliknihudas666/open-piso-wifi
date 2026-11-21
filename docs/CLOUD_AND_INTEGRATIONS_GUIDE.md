@@ -1,15 +1,12 @@
-# ☁️ OpenPisoWiFi Cloud & Remote Fleet Integration Guide
+# ☁️ OpenPisoWiFi Remote Access & Telegram Guide
 
-A complete step-by-step operational manual for connecting your OpenPisoWiFi kiosk fleet to **Telegram**, **Supabase**, **Vercel**, and **Cloudflare** for 100% free, 24/7 remote monitoring and revenue telemetry — without port forwarding or dynamic DNS.
+A complete step-by-step operational manual for accessing your OpenPisoWiFi Admin Panel from anywhere using **Cloudflare Tunnel (`trycloudflare.com`)** and **Telegram Bot** — 100% free, zero port-forwarding, and CGNAT-friendly.
 
 ---
 
 ## 📑 Table of Contents
 1. [🤖 Telegram Bot Setup (Zero-Code via Admin Dashboard)](#1-telegram-bot-setup-zero-code-via-admin-dashboard)
-2. [⚡ Supabase PostgreSQL Cloud Sync](#2-supabase-postgresql-cloud-sync)
-3. [▲ Vercel Cloud Admin Hosting](#3-vercel-cloud-admin-hosting)
-4. [🟠 Cloudflare Zero-Trust Tunnel (CGNAT Bypass)](#4-cloudflare-zero-trust-tunnel-cgnat-bypass)
-5. [🔄 Multi-Machine Fleet Architecture](#5-multi-machine-fleet-architecture)
+2. [🟠 Cloudflare Tunnel Remote Admin Access (Built-In)](#2-cloudflare-tunnel-remote-admin-access-built-in)
 
 ---
 
@@ -88,91 +85,30 @@ The bot will also push real-time notifications to your phone automatically:
 
 ---
 
-## 2. ⚡ Supabase PostgreSQL Cloud Sync
+## 2. 🟠 Cloudflare Tunnel Remote Admin Access (Built-In)
 
-Supabase provides a free, production-grade PostgreSQL cloud database. OpenPisoWiFi automatically synchronizes daily revenue, coin transactions, voucher redemptions, and hardware health to Supabase so you can monitor multiple branches in real time.
+OpenPisoWiFi has built-in `cloudflared` supervision in the hardware daemon. You can access your local Admin Panel from anywhere in the world without opening router ports, paying for a static IP, or creating an external database.
 
-### Step 1: Create a Free Supabase Project
-1. Go to [supabase.com](https://supabase.com) and click **Sign In** (via GitHub or email).
-2. Click **New Project**.
-3. Choose:
-   - **Name:** `openpiso-telemetry`
-   - **Database Password:** Generate a secure password and save it.
-   - **Region:** Choose closest to your kiosks (e.g., `Singapore` for the Philippines/SE Asia).
-   - **Pricing Plan:** Free Tier ($0/month).
-4. Click **Create new project** and wait ~1 minute for provisioning.
+### Zero-Setup Quick Tunnel (`trycloudflare.com`)
+1. Open `/admin` → **Remote Access & Satellites** (or `/admin/cloud`).
+2. Under **Cloudflare Tunnel Remote Admin**, select **Quick (Free)** mode.
+3. Check **Auto-start tunnel on boot & send link to Telegram** and click **Save Tunnel Settings**, or click **Start Tunnel**.
+4. When `cloudflared` generates your `https://*.trycloudflare.com` URL:
+   - It is displayed live in the Admin Panel with Copy & Open buttons.
+   - It is automatically sent to your configured Telegram Admin Chat (`/admin` link ready to tap).
+   - You can also run `/tunnel`, `/tunnel start`, `/tunnel stop`, or `/tunnel restart` in Telegram at any time.
 
-### Step 2: Run the OpenPisoWiFi Database Schema
-1. In your Supabase project dashboard, click **SQL Editor** on the left menu.
-2. Click **New query**.
-3. Copy and paste the contents of [`supabase/schema.sql`](file:///d:/Hudas/Documents/Repository/piso-wifi/supabase/schema.sql) into the editor.
-4. Click **Run** (Ctrl+Enter).
-5. This creates the production tables with Row Level Security:
-   - `piso_machines`: Fleet records, daily revenue, active slots, and uptime.
-   - `piso_transactions`: Real-time coin drops, payment types, and MAC addresses.
-   - `piso_collections`: Historical cash box audits.
-   - `piso_commands`: Cloud-to-edge command queue.
+### Security Gate (Tunnel-Safe by Design)
+When traffic arrives via a Cloudflare Tunnel (`*.trycloudflare.com` or Named Tunnel):
+- Visiting `/` redirects straight to `/admin`.
+- Only `/admin`, `/api/admin/*`, `/api/telegram/*`, `/api/tunnel/*`, and authenticated admin coin-slot tools are reachable.
+- All captive portal, voucher-free-trial, speedtest, and internal daemon routes return `401 Unauthorized`.
+- Your Admin Panel remains protected by your scrypt-hashed Admin PIN and login rate limiter.
 
-### Step 3: Copy your API Credentials
-1. In Supabase, go to **Project Settings** (gear icon) ➔ **API**.
-2. Copy the following:
-   * **Project URL:** `https://your-project-id.supabase.co`
-   * **anon public API Key:** `eyJhbGciOi...`
-   * **service_role Key (Secret):** `eyJhbGciOi...` (used for server-to-server fleet sync).
-
-### Step 4: Configure via Kiosk Admin Portal
-1. Open `/admin` ➔ **Cloud & Satellites** ➔ **Supabase PostgreSQL Sync** (or `/admin/cloud`).
-2. Enter your:
-   - **Supabase URL:** `https://your-project-id.supabase.co`
-   - **Supabase API Key:** (Your `service_role` or `anon` key)
-   - **Machine ID:** Unique branch name, e.g. `kiosk-branch-barangay-1`
-3. Click **Save Configuration**.
-4. The background sync service will start pushing telemetry every 60 seconds and sync every coin transaction live.
-5. If internet goes offline, transactions are queued in memory and flushed automatically upon reconnection.
-
----
-
-## 3. ▲ Vercel Cloud Admin Hosting
-
-Deploying the OpenPisoWiFi admin portal to **Vercel** gives you a free, public web dashboard (`https://my-piso.vercel.app`) to monitor all your machines from anywhere in the world on your smartphone or laptop.
-
-### Step 1: Push Repository to GitHub
-1. Make sure your changes are pushed to your personal GitHub repository:
-   ```bash
-   git add .
-   git commit -m "Configure OpenPisoWiFi"
-   git push origin main
-   ```
-
-### Step 2: Import into Vercel
-1. Go to [vercel.com](https://vercel.com) and log in with your GitHub account.
-2. Click **Add New...** ➔ **Project**.
-3. Select your `piso-wifi` repository.
-4. Set the **Root Directory** to `portal`.
-5. Under **Build and Output Settings**, Vercel automatically detects Next.js:
-   - Build Command: `prisma generate && next build` (configured in [`portal/vercel.json`](file:///d:/Hudas/Documents/Repository/piso-wifi/portal/vercel.json))
-   - Framework: `Next.js`
-
-### Step 3: Add Environment Variables in Vercel
-Under the **Environment Variables** section in Vercel, add:
-* `NEXT_PUBLIC_SUPABASE_URL`: `https://your-project-id.supabase.co`
-* `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase `anon` public key
-* `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase `service_role` secret key
-
-### Step 4: Deploy
-1. Click **Deploy**.
-2. Once the build completes (~1 minute), Vercel will give you a public URL (e.g., `https://openpiso-admin.vercel.app`).
-3. Open `https://your-app.vercel.app/admin/cloud` to view real-time fleet analytics, daily earnings, and remote kiosk health!
-
----
-
-## 4. 🟠 Cloudflare Zero-Trust Tunnel (CGNAT Bypass)
-
-If you want direct, secure web access to your physical Raspberry Pi's local admin console (`http://10.0.0.1:3000/admin`) from anywhere in the world without exposing ports to hackers, use a **Cloudflare Zero-Trust Tunnel (`cloudflared`)**.
-
-* **100% Free** on Cloudflare's standard plan.
-* **Bypasses CGNAT & ISP NAT** with an encrypted outbound tunnel.
-* **No open router ports** (no port 80/443 exposed).
+### Optional: Named Tunnel (Fixed Domain)
+If you own a domain on Cloudflare Zero Trust:
+1. Create a tunnel in Cloudflare Zero Trust → Networks → Tunnels and copy the Tunnel Token.
+2. Switch **Tunnel Mode** to **Named Token**, paste the token, optionally enter your custom hostname (e.g. `https://admin.yourdomain.com`), and click **Save Tunnel Settings**.
 * **Enterprise DDoS protection & Zero-Trust Google/Email login authentication.**
 
 ### Step 1: Sign up for Cloudflare Zero Trust

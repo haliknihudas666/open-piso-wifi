@@ -15,7 +15,7 @@ import {
   type ShieldApplyConfig,
 } from './services/router-controller.js';
 import { TelegramBotService } from './services/telegram-bot.js';
-import { SupabaseSyncService } from './services/supabase-sync.js';
+import { CloudflareTunnelService } from './services/cloudflare-tunnel.js';
 import { SerialCoinBridge } from './services/serial-coin-bridge.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -457,7 +457,6 @@ export function recordShieldAlert(input: Omit<ShieldAlertRecord, 'id' | 'timesta
   if (shieldAlerts.length > MAX_SHIELD_ALERTS) {
     shieldAlerts.length = MAX_SHIELD_ALERTS;
   }
-  supabaseSync.recordSecurityAlert(alert).catch(() => {});
   return alert;
 }
 
@@ -487,9 +486,9 @@ function checkDayRollover() {
   }
 }
 
-// --- Telegram, Supabase & Serial Coin Bridge Services ---
+// --- Telegram, Cloudflare Tunnel & Serial Coin Bridge Services ---
 export const telegramBot = new TelegramBotService();
-export const supabaseSync = new SupabaseSyncService();
+export const cloudflareTunnel = new CloudflareTunnelService(parseInt(process.env.PORTAL_PORT || '3000', 10) || 3000);
 export const serialCoinBridge = new SerialCoinBridge();
 
 /**
@@ -1613,6 +1612,73 @@ app.get('/api/telegram/status', (_req: Request, res: Response) => {
   });
 });
 
+// Cloudflare Tunnel Status & Controls
+app.get('/api/tunnel/status', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    status: cloudflareTunnel.getStatus(),
+  });
+});
+
+app.post('/api/tunnel/start', async (_req: Request, res: Response) => {
+  const status = await cloudflareTunnel.start();
+  res.json({
+    success: status.installed && (status.running || !status.lastError),
+    status,
+    message: status.lastError || (status.running ? 'Cloudflare Tunnel started' : 'Starting Cloudflare Tunnel'),
+  });
+});
+
+app.post('/api/tunnel/stop', async (_req: Request, res: Response) => {
+  const status = await cloudflareTunnel.stop({ disable: true });
+  res.json({
+    success: true,
+    status,
+    message: 'Cloudflare Tunnel stopped',
+  });
+});
+
+app.post('/api/tunnel/restart', async (_req: Request, res: Response) => {
+  const status = await cloudflareTunnel.restart();
+  res.json({
+    success: status.installed && (status.running || !status.lastError),
+    status,
+    message: status.lastError || 'Cloudflare Tunnel restarted',
+  });
+});
+
+app.post(
+  '/api/tunnel/config',
+  async (
+    req: Request<
+      {},
+      {},
+      {
+        enabled?: boolean;
+        mode?: 'quick' | 'named';
+        tunnelToken?: string;
+        clearToken?: boolean;
+        customHostname?: string;
+      }
+    >,
+    res: Response
+  ) => {
+    const body = req.body || {};
+    const status = await cloudflareTunnel.updateConfig({
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+      mode: body.mode === 'named' || body.mode === 'quick' ? body.mode : undefined,
+      tunnelToken: typeof body.tunnelToken === 'string' ? body.tunnelToken : undefined,
+      clearToken: body.clearToken === true,
+      customHostname: typeof body.customHostname === 'string' ? body.customHostname : undefined,
+    });
+    res.json({
+      success: true,
+      status,
+      message: 'Cloudflare Tunnel configuration updated',
+    });
+  }
+);
+
 interface GpioConfigRequestBody {
   coinBcm?: number;
   inhibitBcm?: number;
@@ -1980,20 +2046,6 @@ app.post('/api/authorize', async (req: Request<{}, {}, AuthorizeRequestBody>, re
   // Instant notification to Telegram admin only for new sessions or explicit paid amounts
   if (notify !== false && (isNewSession === true || (typeof amount === 'number' && amount > 0))) {
     telegramBot.notifySessionAuthorized(slotName, txAmount, durationMinutes, mac);
-  }
-
-  // Sync to Supabase PostgreSQL cloud database only for genuine new transactions
-  if (isPaidTransaction) {
-    const normalizedTxType: 'COIN' | 'VOUCHER' | 'FREE_TRIAL' =
-      type === 'VOUCHER' || type === 'FREE_TRIAL' ? type : 'COIN';
-    supabaseSync.recordTransaction({
-      slotId: slotId || 'main',
-      slotName,
-      amount: txAmount,
-      durationMinutes,
-      macAddress: mac,
-      type: normalizedTxType,
-    }).catch(() => {});
   }
 
   res.json({ success: true, mac, expires_in: durationMinutes, recordedAmount: txAmount });
@@ -2438,7 +2490,6 @@ export async function startDaemon(): Promise<void> {
       if (prevWanStatus === false && consecutiveWanSuccesses >= 1) {
         prevWanStatus = true;
         telegramBot.notifyWanStatus(true);
-        void supabaseSync.flushOfflineQueue();
       }
     }
   }, 15000);
@@ -2457,7 +2508,6 @@ export async function startDaemon(): Promise<void> {
       resetCashBox: () => {
         const collected = cashBoxAmount;
         cashBoxAmount = 0;
-        void supabaseSync.recordCashCollection(collected);
         return collected;
       },
       getSlotsStatus: () => {
@@ -2482,7 +2532,50 @@ export async function startDaemon(): Promise<void> {
         };
       },
     });
+    telegramBot.setTunnelController(cloudflareTunnel);
+    cloudflareTunnel.onUrlReady((url, mode) => {
+      void telegramBot.notifyTunnelUrl(url, mode);
+    });
     telegramBot.start({ isBoot: true });
+
+    if (cloudflareTunnel.isConfigured()) {
+      void cloudflareTunnel.start();
+    } else {
+      const portalPort = process.env.PORTAL_PORT || '3000';
+      const bootstrapTunnelFromPortal = async (attempt = 1) => {
+        if (cloudflareTunnel.isConfigured()) return;
+        try {
+          const res = await fetch(`http://127.0.0.1:${portalPort}/api/tunnel`, {
+            headers: {
+              'Cache-Control': 'no-store',
+              'x-daemon-secret': process.env.DAEMON_API_SECRET || '',
+            },
+            signal: AbortSignal.timeout(3000),
+          });
+          if (res.ok) {
+            const data = (await res.json()) as {
+              config?: { enabled?: boolean; mode?: 'quick' | 'named'; tunnelToken?: string; customHostname?: string };
+            };
+            if (data.config?.enabled) {
+              console.log('[TUNNEL] 🔄 Loaded saved Cloudflare Tunnel configuration from Portal database on boot.');
+              await cloudflareTunnel.updateConfig({
+                enabled: true,
+                mode: data.config.mode === 'named' ? 'named' : 'quick',
+                tunnelToken: data.config.tunnelToken || '',
+                customHostname: data.config.customHostname || '',
+              });
+              return;
+            }
+          }
+        } catch {
+          // Portal may still be starting up right after boot
+        }
+        if (attempt < 10 && !cloudflareTunnel.isConfigured()) {
+          setTimeout(() => bootstrapTunnelFromPortal(attempt + 1), 3000);
+        }
+      };
+      setTimeout(() => bootstrapTunnelFromPortal(1), 2500);
+    }
 
     // Bootstrap fallback: pull saved Telegram credentials from local Portal once ready
     if (!telegramBot.getStatus().configured) {
@@ -2514,55 +2607,6 @@ export async function startDaemon(): Promise<void> {
       };
       setTimeout(() => bootstrapTelegramFromPortal(1), 2000);
     }
-
-    setInterval(() => {
-      if (supabaseSync.enabled) {
-        void supabaseSync.syncHeartbeat({
-          uptimeSeconds: Math.floor(process.uptime()),
-          activeSlots: satelliteCoinslots.size + (isHardwareGpioAvailable ? 1 : 0),
-          isWanOnline,
-          currentCashBox: cashBoxAmount,
-          todayTotal: todaySalesTotal,
-        });
-      }
-    }, 60000);
-
-    supabaseSync.setCommandHandler(async (commandType: string, payload: any) => {
-      switch (commandType) {
-        case 'kick_session': {
-          if (!payload.mac) return { success: false, error: 'MAC address required' };
-          const res = await router.kickStation(payload.mac);
-          return { success: res.success, error: res.error };
-        }
-        case 'add_time': {
-          if (!payload.mac || typeof payload.durationMinutes !== 'number') {
-            return { success: false, error: 'mac and durationMinutes required' };
-          }
-          const res = await router.authorize(payload.mac, payload.durationMinutes, payload.ip);
-          return { success: res.success, error: res.error };
-        }
-        case 'unlock_slot': {
-          const ok = await enableCoinSlot(true);
-          return { success: ok };
-        }
-        case 'lock_slot': {
-          disableCoinSlot('manual');
-          return { success: true };
-        }
-        case 'reboot_router': {
-          const res = await router.rebootRouter();
-          return { success: res.success, error: res.success ? undefined : res.message };
-        }
-        default:
-          return { success: false, error: `Unsupported command type: ${commandType}` };
-      }
-    });
-
-    setInterval(() => {
-      if (supabaseSync.enabled) {
-        void supabaseSync.pollAndExecuteCommands();
-      }
-    }, 10000);
   });
 
 /**

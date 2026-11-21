@@ -117,8 +117,8 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string; icon: any 
     icon: Cpu,
   },
   cloud: {
-    title: 'Cloud Sync & Multi-Coinslots',
-    subtitle: 'Manage remote wireless ESP32 coinslots, free Telegram bot alerts, and Supabase cloud sync',
+    title: 'Remote Access & Multi-Coinslots',
+    subtitle: 'Manage Cloudflare Tunnel remote admin access, Telegram bot alerts, and wireless ESP32 coinslots',
     icon: Cloud,
   },
   about: {

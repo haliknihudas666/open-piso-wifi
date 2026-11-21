@@ -20,7 +20,7 @@
 
 ## 📖 Overview
 
-**OpenPisoWiFi** is a production-grade, security-hardened open-source Piso Wi-Fi vending machine, captive paywall, and multi-architecture kiosk controller system. It cleanly decouples gigabit routing, dual-band Wi-Fi broadcasting (with **OWE & 802.11w PMF** anti-deauth protection), and kernel-level `nftables` packet filtering on an **OpenWrt Router** or **Standalone Linux Gateway**, with tamper-guarded coin pulse aggregation via an **ESP32 microcontroller bridge** or direct **Raspberry Pi / SBC GPIO**, and centralized telemetry backed by free **Supabase Cloud Fleet Management**.
+**OpenPisoWiFi** is a production-grade, security-hardened open-source Piso Wi-Fi vending machine, captive paywall, and multi-architecture kiosk controller system. It cleanly decouples gigabit routing, dual-band Wi-Fi broadcasting (with **OWE & 802.11w PMF** anti-deauth protection), and kernel-level `nftables` packet filtering on an **OpenWrt Router** or **Standalone Linux Gateway**, with tamper-guarded coin pulse aggregation via an **ESP32 microcontroller bridge** or direct **Raspberry Pi / SBC GPIO**, and zero-config remote admin access via **Cloudflare Tunnel (`trycloudflare.com`)** & **Telegram Bot**.
 
 🌐 **Official Website / Landing Page**: [https://openpisowifi.nicolei.games/](https://openpisowifi.nicolei.games/)
 

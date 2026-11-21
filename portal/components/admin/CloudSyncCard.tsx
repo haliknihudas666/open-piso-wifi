@@ -20,6 +20,12 @@ import {
   EyeOff,
   Save,
   HelpCircle,
+  Globe,
+  Copy,
+  Check,
+  Play,
+  Square,
+  RotateCw,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -39,6 +45,31 @@ interface SatelliteSlot {
   pendingCoins?: number;
 }
 
+interface TunnelApiResponse {
+  success: boolean;
+  daemonOnline?: boolean;
+  status?: {
+    installed: boolean;
+    version: string | null;
+    running: boolean;
+    enabled: boolean;
+    mode: 'quick' | 'named';
+    hasToken: boolean;
+    customHostname: string;
+    publicUrl: string | null;
+    pid: number | null;
+    lastStartedAt: string | null;
+    lastError: string | null;
+  } | null;
+  config?: {
+    enabled: boolean;
+    mode: 'quick' | 'named';
+    hasToken: boolean;
+    tokenMasked: string | null;
+    customHostname: string;
+  };
+}
+
 export function CloudSyncCard() {
   const { data: slotsData, mutate: mutateSlots, isValidating } = useSWR<{ slots: SatelliteSlot[] }>(
     '/api/coinslots',
@@ -46,10 +77,26 @@ export function CloudSyncCard() {
     { refreshInterval: 5000 }
   );
 
+  const { data: tunnelData, mutate: mutateTunnel } = useSWR<TunnelApiResponse>(
+    '/api/tunnel',
+    fetcher,
+    { refreshInterval: 4000 }
+  );
+
   const [testingSlotId, setTestingSlotId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [isSendingTelegram, setIsSendingTelegram] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
+
+  // Cloudflare Tunnel State
+  const [tunnelEnabled, setTunnelEnabled] = useState(false);
+  const [tunnelMode, setTunnelMode] = useState<'quick' | 'named'>('quick');
+  const [tunnelToken, setTunnelToken] = useState('');
+  const [tunnelHostname, setTunnelHostname] = useState('');
+  const [showTunnelToken, setShowTunnelToken] = useState(false);
+  const [tunnelFeedback, setTunnelFeedback] = useState<string | null>(null);
+  const [isTunnelBusy, setIsTunnelBusy] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
 
   // Telegram In-Dashboard Configuration (No .env editing needed!)
   const [botToken, setBotToken] = useState('');
@@ -80,6 +127,77 @@ export function CloudSyncCard() {
   useEffect(() => {
     refreshTelegramConfig();
   }, []);
+
+  useEffect(() => {
+    if (tunnelData?.config) {
+      setTunnelEnabled(Boolean(tunnelData.config.enabled));
+      setTunnelMode(tunnelData.config.mode === 'named' ? 'named' : 'quick');
+      if (tunnelData.config.customHostname !== undefined) {
+        setTunnelHostname(tunnelData.config.customHostname || '');
+      }
+    }
+  }, [tunnelData?.config?.enabled, tunnelData?.config?.mode, tunnelData?.config?.customHostname]);
+
+  const handleTunnelAction = async (action: 'start' | 'stop' | 'restart') => {
+    setIsTunnelBusy(true);
+    setTunnelFeedback(null);
+    try {
+      const res = await fetch('/api/tunnel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTunnelFeedback(`✅ ${data.message || `Tunnel ${action}ed.`}`);
+      } else {
+        setTunnelFeedback(`❌ ${data.message || `Failed to ${action} tunnel.`}`);
+      }
+      await mutateTunnel();
+    } catch (err: any) {
+      setTunnelFeedback(`❌ Error: ${err.message}`);
+    } finally {
+      setIsTunnelBusy(false);
+    }
+  };
+
+  const handleSaveTunnelConfig = async () => {
+    setIsTunnelBusy(true);
+    setTunnelFeedback(null);
+    try {
+      const res = await fetch('/api/tunnel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'config',
+          enabled: tunnelEnabled,
+          mode: tunnelMode,
+          tunnelToken: tunnelToken.trim() || undefined,
+          customHostname: tunnelHostname.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTunnelToken('');
+        setTunnelFeedback(`✅ ${data.message}`);
+      } else {
+        setTunnelFeedback(`❌ ${data.message || 'Failed to save tunnel settings.'}`);
+      }
+      await mutateTunnel();
+    } catch (err: any) {
+      setTunnelFeedback(`❌ Error: ${err.message}`);
+    } finally {
+      setIsTunnelBusy(false);
+    }
+  };
+
+  const handleCopyTunnelUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2000);
+    } catch {}
+  };
 
   const slots = slotsData?.slots || [];
 
@@ -191,10 +309,10 @@ export function CloudSyncCard() {
               </div>
               <div>
                 <CardTitle className="text-xl font-bold flex items-center gap-2">
-                  Multi-Coinslot & Cloud Sync Hub
+                  Remote Access & Multi-Coinslot Hub
                 </CardTitle>
                 <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-                  Manage remote ESP32 wireless coin acceptors, free Telegram bot notifications, and Supabase cloud sync.
+                  Manage Cloudflare Tunnel remote admin access, free Telegram bot notifications, and ESP32 wireless coinslots.
                 </p>
               </div>
             </div>
@@ -216,7 +334,7 @@ export function CloudSyncCard() {
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-bold bg-amber-400 text-black border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-transform"
               >
                 <ExternalLink className="w-4 h-4" />
-                Open Cloud Portal
+                Remote Access View
               </a>
             </div>
           </div>
@@ -473,53 +591,233 @@ export function CloudSyncCard() {
             <div className="p-2.5 bg-neutral-50 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded-xl space-y-1 text-[11px] font-mono">
               <div className="text-neutral-500 font-bold">Supported Telegram Commands:</div>
               <div className="text-neutral-700 dark:text-neutral-300 flex flex-wrap gap-1.5">
+                <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/tunnel</span>
                 <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/sales</span>
                 <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/slots</span>
                 <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/emptybox</span>
                 <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/wan</span>
+                <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/shield</span>
                 <span className="px-1.5 py-0.5 bg-white dark:bg-neutral-900 border rounded">/help</span>
               </div>
             </div>
           </div>
         </Card>
 
-        {/* Supabase Cloud Card */}
+        {/* Cloudflare Tunnel Remote Admin Card */}
         <Card className="border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
           <CardHeader className="p-5 border-b-2 border-black bg-neutral-50 dark:bg-neutral-900">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-500" />
-              <CardTitle className="text-base font-bold">Supabase PostgreSQL Sync</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Globe className="w-5 h-5 text-orange-500" />
+                <CardTitle className="text-base font-bold">Cloudflare Tunnel Remote Admin</CardTitle>
+              </div>
+              {tunnelData?.status?.running ? (
+                <Badge variant="success" className="border-black border">
+                  Live
+                </Badge>
+              ) : tunnelData?.status && !tunnelData.status.installed ? (
+                <Badge variant="danger" className="border-black border">
+                  cloudflared Missing
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="border-black border">
+                  Stopped
+                </Badge>
+              )}
             </div>
           </CardHeader>
           <div className="p-5 space-y-4">
             <p className="text-xs text-neutral-600 dark:text-neutral-400">
-              Transactions and machine telemetry sync automatically to Supabase. Even if internet drops, records queue safely in memory and sync on recovery.
+              Access your Admin Panel from anywhere over HTTPS without port-forwarding or CGNAT issues. Only <code className="font-mono font-bold">/admin</code> is exposed; captive portal &amp; coin APIs are blocked over the tunnel.
             </p>
 
-            <div className="p-3 bg-neutral-50 dark:bg-neutral-800 border-2 border-black rounded-xl space-y-2 text-xs font-mono">
-              <div className="flex justify-between">
-                <span className="text-neutral-500">PostgreSQL Engine:</span>
-                <span className="font-bold text-neutral-900 dark:text-neutral-100">Supabase PostgREST</span>
+            {/* Live Public URL Box */}
+            {tunnelData?.status?.publicUrl ? (
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border-2 border-black rounded-xl space-y-2">
+                <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center justify-between">
+                  <span>Active Remote Admin Link</span>
+                  <span className="font-mono text-[11px] opacity-80">
+                    {tunnelData.status.mode === 'named' ? 'Named Tunnel' : 'trycloudflare.com'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono bg-white dark:bg-neutral-900 px-2.5 py-2 rounded border border-black truncate">
+                    {`${tunnelData.status.publicUrl.replace(/\/+$/, '')}/admin`}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCopyTunnelUrl(`${tunnelData.status!.publicUrl!.replace(/\/+$/, '')}/admin`)}
+                    className="border-2 border-black shrink-0"
+                  >
+                    {copiedUrl ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                  <a
+                    href={`${tunnelData.status.publicUrl.replace(/\/+$/, '')}/admin`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center p-2 bg-amber-400 text-black border-2 border-black rounded-md hover:bg-amber-300 shrink-0"
+                    title="Open Remote Admin"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-neutral-500">Offline Resilience:</span>
-                <span className="text-emerald-600 font-bold">In-Memory Fail-Soft Queue</span>
+            ) : (
+              <div className="p-3 bg-neutral-50 dark:bg-neutral-800 border-2 border-black rounded-xl text-xs text-neutral-600 dark:text-neutral-400">
+                {tunnelData?.status && !tunnelData.status.installed ? (
+                  <span>
+                    ⚠️ <code className="font-mono font-bold">cloudflared</code> is not installed on this host. Run <code className="font-mono">scripts/update.sh</code> or install <code className="font-mono">cloudflared</code> to enable tunnels.
+                  </span>
+                ) : tunnelData?.status?.running ? (
+                  <span>⏳ Tunnel process is running — waiting for Cloudflare to assign your URL...</span>
+                ) : (
+                  <span>Tunnel is currently stopped. Click <strong>Start Tunnel</strong> to generate a link and send it to Telegram.</span>
+                )}
+                {tunnelData?.status?.lastError && (
+                  <p className="mt-1.5 text-red-600 dark:text-red-400 font-mono text-[11px]">
+                    Last error: {tunnelData.status.lastError}
+                  </p>
+                )}
               </div>
-              <div className="flex justify-between">
-                <span className="text-neutral-500">Heartbeat Interval:</span>
-                <span>Every 60 seconds</span>
-              </div>
+            )}
+
+            {/* Quick Start / Stop / Restart Controls */}
+            <div className="flex flex-wrap gap-2">
+              {!tunnelData?.status?.running ? (
+                <Button
+                  type="button"
+                  onClick={() => handleTunnelAction('start')}
+                  disabled={isTunnelBusy}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white font-bold border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  <Play className="w-4 h-4 mr-1.5" />
+                  Start Tunnel
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    onClick={() => handleTunnelAction('restart')}
+                    disabled={isTunnelBusy}
+                    variant="outline"
+                    className="flex-1 font-bold border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                  >
+                    <RotateCw className={`w-4 h-4 mr-1.5 ${isTunnelBusy ? 'animate-spin' : ''}`} />
+                    New Link
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => handleTunnelAction('stop')}
+                    disabled={isTunnelBusy}
+                    variant="danger"
+                    className="flex-1 font-bold border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                  >
+                    <Square className="w-4 h-4 mr-1.5" />
+                    Stop
+                  </Button>
+                </>
+              )}
             </div>
 
-            <div className="pt-2">
-              <a
-                href="/admin/cloud"
-                className="w-full inline-flex items-center justify-center gap-2 py-2 px-4 font-bold bg-amber-400 hover:bg-amber-300 text-black border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-transform text-sm"
+            {/* Mode & Persistence Settings */}
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-800 border-2 border-black rounded-xl space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold">Tunnel Mode</span>
+                <div className="inline-flex rounded-lg border-2 border-black overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setTunnelMode('quick')}
+                    className={`px-2.5 py-1 text-xs font-bold transition-colors ${
+                      tunnelMode === 'quick'
+                        ? 'bg-amber-400 text-black'
+                        : 'bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    Quick (Free)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTunnelMode('named')}
+                    className={`px-2.5 py-1 text-xs font-bold border-l-2 border-black transition-colors ${
+                      tunnelMode === 'named'
+                        ? 'bg-amber-400 text-black'
+                        : 'bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    Named Token
+                  </button>
+                </div>
+              </div>
+
+              {tunnelMode === 'named' && (
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="text-[11px] font-bold block mb-1">
+                      Cloudflare Tunnel Token
+                      {tunnelData?.config?.hasToken && (
+                        <span className="ml-1.5 text-emerald-600 font-mono">
+                          (Saved: {tunnelData.config.tokenMasked})
+                        </span>
+                      )}
+                    </label>
+                    <div className="relative">
+                      <Input
+                        type={showTunnelToken ? 'text' : 'password'}
+                        value={tunnelToken}
+                        onChange={(e) => setTunnelToken(e.target.value)}
+                        placeholder={tunnelData?.config?.hasToken ? 'Enter new token to replace...' : 'Paste token from Cloudflare Zero Trust'}
+                        className="border-2 border-black font-mono text-xs pr-9"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowTunnelToken(!showTunnelToken)}
+                        className="absolute right-2.5 top-2.5 text-neutral-500 hover:text-black"
+                      >
+                        {showTunnelToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold block mb-1">Custom Hostname (Optional)</label>
+                    <Input
+                      type="text"
+                      value={tunnelHostname}
+                      onChange={(e) => setTunnelHostname(e.target.value)}
+                      placeholder="https://admin.yourdomain.com"
+                      className="border-2 border-black font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={tunnelEnabled}
+                  onChange={(e) => setTunnelEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-2 border-black accent-amber-400"
+                />
+                Auto-start tunnel on boot &amp; send link to Telegram
+              </label>
+
+              <Button
+                type="button"
+                onClick={handleSaveTunnelConfig}
+                disabled={isTunnelBusy}
+                className="w-full font-bold bg-amber-400 hover:bg-amber-300 text-black border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
               >
-                <ExternalLink className="w-4 h-4" />
-                Launch Modern Cloud Admin Dashboard
-              </a>
+                <Save className="w-4 h-4 mr-1.5" />
+                Save Tunnel Settings
+              </Button>
             </div>
+
+            {tunnelFeedback && (
+              <div className="p-2.5 bg-white dark:bg-neutral-900 border-2 border-black rounded-lg text-xs font-medium">
+                {tunnelFeedback}
+              </div>
+            )}
           </div>
         </Card>
       </div>

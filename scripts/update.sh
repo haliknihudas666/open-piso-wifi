@@ -723,6 +723,32 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 if [ "$HAS_SUDO_ACCESS" = true ]; then
+    # Ensure cloudflared is installed for Remote Admin Tunnel (with retries)
+    if ! command -v cloudflared >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        CF_ARCH=""
+        case "$(uname -m)" in
+            x86_64|amd64) CF_ARCH="amd64" ;;
+            aarch64|arm64) CF_ARCH="arm64" ;;
+            armv7l|armv6l|armhf) CF_ARCH="arm" ;;
+        esac
+        if [ -n "$CF_ARCH" ]; then
+            echo -e "--> Installing cloudflared for Remote Admin Tunnel..."
+            CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
+            for attempt in 1 2 3; do
+                if curl -fSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 120 "$CF_URL" -o /tmp/cloudflared 2>/dev/null; then
+                    $SUDO_CMD install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared 2>/dev/null || true
+                    rm -f /tmp/cloudflared
+                    if command -v cloudflared >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ cloudflared installed: $(cloudflared --version 2>/dev/null | head -n1)${NC}"
+                        break
+                    fi
+                fi
+                rm -f /tmp/cloudflared
+                [ "$attempt" -lt 3 ] && echo -e "${YELLOW}⚠️ cloudflared download failed (attempt ${attempt}/3). Retrying in 3s...${NC}" && sleep 3
+            done
+        fi
+    fi
+
     $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
 
     # Restart Hardware Daemon

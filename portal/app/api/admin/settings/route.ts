@@ -31,7 +31,6 @@ export async function GET(request: NextRequest) {
     }
 
     const rawTelegramToken = settingsMap.telegram_bot_token || "";
-    const rawSupabaseKey = settingsMap.supabase_key || "";
     const rawIotPassphrase = settingsMap.shield_iot_passphrase || "";
 
     return NextResponse.json({
@@ -86,15 +85,11 @@ export async function GET(request: NextRequest) {
       loyalty_enabled: settingsMap.loyalty_enabled || "true",
       loyalty_min_amount: settingsMap.loyalty_min_amount || "1",
       loyalty_milestones: settingsMap.loyalty_milestones || "",
-      // Telegram Bot & Cloud Telemetry Settings (secrets redacted)
+      // Telegram Bot & Machine ID Settings (secrets redacted)
       telegram_bot_token: "",
       has_telegram_token: Boolean(rawTelegramToken),
       telegram_token_masked: maskSecret(rawTelegramToken),
       telegram_admin_chat_id: settingsMap.telegram_admin_chat_id || "",
-      supabase_url: settingsMap.supabase_url || "",
-      supabase_key: "",
-      has_supabase_key: Boolean(rawSupabaseKey),
-      supabase_key_masked: maskSecret(rawSupabaseKey),
       machine_id: settingsMap.machine_id || "openpiso-kiosk-1",
       // OpenPiso Shield Settings
       shield_owe_mode: settingsMap.shield_owe_mode || "owe_5g",
@@ -167,9 +162,8 @@ export async function POST(request: NextRequest) {
       "loyalty_enabled",
       "loyalty_min_amount",
       "loyalty_milestones",
-      // Non-secret Telegram & Cloud fields
+      // Non-secret Telegram & Machine fields
       "telegram_admin_chat_id",
-      "supabase_url",
       "machine_id",
       // OpenPiso Shield non-secret settings
       "shield_owe_mode",
@@ -217,20 +211,6 @@ export async function POST(request: NextRequest) {
         create: { key: "telegram_bot_token", value: String(body.telegram_bot_token).trim() },
       });
       telegramTokenUpdated = true;
-    }
-
-    if (body.clear_supabase_key === true) {
-      await prisma.setting.upsert({
-        where: { key: "supabase_key" },
-        update: { value: "" },
-        create: { key: "supabase_key", value: "" },
-      });
-    } else if (!isBlankOrMaskedSecret(body.supabase_key)) {
-      await prisma.setting.upsert({
-        where: { key: "supabase_key" },
-        update: { value: String(body.supabase_key).trim() },
-        create: { key: "supabase_key", value: String(body.supabase_key).trim() },
-      });
     }
 
     if (body.clear_iot_passphrase === true) {
