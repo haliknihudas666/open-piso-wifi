@@ -327,15 +327,6 @@ export function CloudSyncCard() {
                 <RefreshCw className={`w-4 h-4 ${isValidating ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
-              <a
-                href="/admin/cloud"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-bold bg-amber-400 text-black border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-transform"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Remote Access View
-              </a>
             </div>
           </div>
         </CardHeader>

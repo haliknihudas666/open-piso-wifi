@@ -18,7 +18,7 @@ const spaceMono = Space_Mono({
 
 export const metadata: Metadata = {
   title: 'OpenPisoWiFi — Free & Open-Source Piso Wi-Fi Operating System',
-  description: 'The modern, security-hardened open-source Piso-WiFi operating system with zero license fees. Protected by OpenPiso Shield (OWE/802.11w PMF anti-deauth & WIDS), Linux nftables, ESP32 tamper-guarded coinslots, and Supabase cloud fleet telemetry.',
+  description: 'The modern, security-hardened open-source Piso-WiFi operating system with zero license fees. Protected by OpenPiso Shield (OWE/802.11w PMF anti-deauth & WIDS), Linux nftables, ESP32 tamper-guarded coinslots, and Cloudflare Tunnel + Telegram remote admin access.',
   keywords: ['piso wifi', 'open source piso wifi', 'captive portal', 'openwrt', 'raspberry pi', 'esp32 coinslot', 'anti deauth', '802.11w pmf', 'openpiso shield', 'juanfi alternative', 'lpb alternative'],
   openGraph: {
     title: 'OpenPisoWiFi — Free & Open-Source Piso Wi-Fi Operating System',

@@ -61,6 +61,7 @@ By utilizing native Linux `nftables` sets with kernel-level expiry timeouts, int
 - **🩺 System Health & Telemetry**: Live CPU temperature, RAM usage, storage space, OpenWrt CPU load, uptime, and Dropbear SSH status.
 - **⚡ Remote Power Controls**: One-click remote reboot of the OpenWrt router or Raspberry Pi, and manual flush of firewall authorization tables.
 - **🔄 1-Click State-Preserving OTA Updates**: Update to the latest release directly from the web interface or terminal in under 5 seconds without losing database records, active client sessions, or custom Wi-Fi credentials.
+- **🌐 Built-In Cloudflare Tunnel & Telegram Remote Access**: Manage your Admin Panel from anywhere over HTTPS without port-forwarding or CGNAT issues using zero-setup `trycloudflare.com` Quick Tunnels (or optional Named Tunnel tokens). The generated `/admin` link is shown live in the dashboard and sent automatically to your Telegram Admin Chat (with `/tunnel`, `/sales`, `/slots`, `/emptybox`, `/wan`, `/shield`), while captive-portal and coin-slot routes are blocked (`401`) over the tunnel.
 
 ---
 

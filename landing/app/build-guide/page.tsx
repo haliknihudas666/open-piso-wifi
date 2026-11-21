@@ -86,7 +86,7 @@ export default function BuildGuidePage() {
             <a href="#materials" className="hover:underline">1. Materials (BOM)</a>
             <a href="#pinouts" className="hover:underline">2. Wiring &amp; Pins</a>
             <a href="#software" className="hover:underline">3. Setup Software</a>
-            <a href="#cloud" className="hover:underline text-sky-700">4. Cloud &amp; Bots</a>
+            <a href="#cloud" className="hover:underline text-sky-700">4. Tunnel &amp; Bots</a>
             <Link href="/flasher" className="hover:underline font-black flex items-center gap-1 text-emerald-800">
               ⚡ Web Flasher <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-mono">USB</span>
             </Link>
@@ -140,7 +140,7 @@ export default function BuildGuidePage() {
               onClick={() => setMobileMenuOpen(false)}
               className="block p-2.5 bg-[#ffe17c] neo-border rounded-xl font-bold text-xs hover:bg-amber-200"
             >
-              ☁️ 4. Telegram, Supabase &amp; Cloudflare
+              🌐 4. Telegram &amp; Cloudflare Tunnel
             </a>
             <a
               href="#troubleshooting"
@@ -1104,14 +1104,14 @@ export default function BuildGuidePage() {
                 <span className="text-xs font-mono font-bold text-sky-700 uppercase">Cloud &amp; Automation</span>
               </div>
               <h2 className="text-2xl sm:text-4xl font-black mt-1">
-                ☁️ Telegram, Supabase, Vercel &amp; Cloudflare Setup
+                🌐 Telegram &amp; Cloudflare Tunnel Setup
               </h2>
               <p className="text-sm font-bold text-neutral-600 mt-1">
-                100% free remote monitoring stack. Configure Telegram bot alerts directly in the Admin GUI by simply pasting your key — zero terminal commands or <code>.env</code> file edits required.
+                100% free remote admin &amp; monitoring stack. Configure Telegram bot alerts and Cloudflare Quick Tunnels (<code>trycloudflare.com</code>) directly in the Admin GUI — zero terminal commands or <code>.env</code> file edits required.
               </p>
             </div>
             <div className="flex items-center gap-2 font-mono text-xs text-neutral-600 font-bold">
-              <span>🤖 Long-Polling Bot</span> • <span>⚡ Supabase PostgreSQL</span>
+              <span>🤖 Long-Polling Bot</span> • <span>🌐 Cloudflare Tunnel</span>
             </div>
           </div>
 
@@ -1155,10 +1155,12 @@ export default function BuildGuidePage() {
                   <div className="p-3 bg-neutral-900 border border-neutral-700 rounded-xl space-y-1.5 text-neutral-200">
                     <div className="text-[#ffe17c] font-black text-[11px]">Supported Remote Phone Commands:</div>
                     <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div><code>/tunnel</code> - Remote admin link</div>
                       <div><code>/sales</code> - Live revenue today</div>
                       <div><code>/slots</code> - Hardware health</div>
                       <div><code>/emptybox</code> - Reset audit counter</div>
                       <div><code>/wan</code> - Router latency &amp; ping</div>
+                      <div><code>/shield</code> - Security alerts</div>
                     </div>
                   </div>
                 </div>
@@ -1170,96 +1172,52 @@ export default function BuildGuidePage() {
               </div>
             </div>
 
-            {/* Integration 2: Supabase PostgreSQL */}
+            {/* Integration 2: Built-In Cloudflare Tunnel */}
             <div className="bg-white neo-border-3 rounded-2xl p-6 sm:p-7 neo-shadow space-y-5 flex flex-col justify-between">
               <div className="space-y-4">
                 <div className="flex items-center justify-between border-b-2 border-black pb-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-2xl">⚡</span>
+                    <span className="text-2xl">🌐</span>
                     <div>
-                      <h3 className="text-lg font-black leading-tight">Supabase PostgreSQL Fleet Sync</h3>
-                      <span className="text-[10px] font-mono font-bold text-emerald-600 uppercase">Cloud Database • Multi-Branch Telemetry</span>
+                      <h3 className="text-lg font-black leading-tight">Built-In Cloudflare Tunnel</h3>
+                      <span className="text-[10px] font-mono font-bold text-orange-600 uppercase">trycloudflare.com • Admin-Only Gate</span>
                     </div>
                   </div>
                   <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-mono font-black rounded border border-emerald-300">
-                    $0/MO FREE TIER
+                    $0/MO FREE
                   </span>
                 </div>
 
                 <p className="text-xs text-neutral-700 leading-relaxed font-medium">
-                  Centralize coin revenue, transaction records, voucher logs, and kiosk heartbeats from all your machines across multiple barangays into a single high-performance PostgreSQL cloud database.
+                  Access your Admin Panel from anywhere over HTTPS without port-forwarding, static IPs, or external databases. The daemon supervises <code>cloudflared</code>, shows the live link in the Admin UI, and sends it straight to your Telegram chat.
                 </p>
 
                 <div className="space-y-3 font-mono text-xs">
-                  <div className="p-3 bg-emerald-50 neo-border rounded-xl space-y-1 text-black">
-                    <span className="font-bold text-emerald-900 flex items-center gap-1.5">
-                      <Database className="w-3.5 h-3.5 text-emerald-600" />
+                  <div className="p-3 bg-orange-50 neo-border rounded-xl space-y-1 text-black">
+                    <span className="font-bold text-orange-900 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-orange-600" />
                       Step-by-Step Setup:
                     </span>
                     <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-neutral-800 pt-1">
-                      <li>Create a free account at <a href="https://supabase.com" target="_blank" rel="noreferrer" className="font-bold underline text-emerald-700">supabase.com</a>.</li>
-                      <li>Create a new project (e.g. <code>openpiso-fleet</code>, Region: Singapore).</li>
-                      <li>In <strong>SQL Editor</strong>, paste and run the contents of <code>supabase/schema.sql</code>.</li>
-                      <li>Copy your <strong>Project URL</strong> and <strong>API Key</strong> from Settings ➔ API.</li>
-                      <li>Paste them into your kiosk <code>/admin/cloud</code> console. Telemetry queues in memory and flushes every 60s!</li>
+                      <li>Open <code>/admin</code> ➔ <strong>Remote Access &amp; Multi-Coinslots</strong>.</li>
+                      <li>Keep <strong>Quick (Free)</strong> selected (zero Cloudflare account needed) or switch to <strong>Named Token</strong> for a custom domain.</li>
+                      <li>Click <strong>Start Tunnel</strong> (or enable <strong>Auto-start on boot</strong> and save).</li>
+                      <li>Open the generated <code>https://*.trycloudflare.com/admin</code> link from the dashboard or your Telegram alert!</li>
                     </ol>
                   </div>
 
                   <div className="p-3 bg-neutral-900 border border-neutral-700 rounded-xl space-y-1.5 text-neutral-200">
-                    <div className="text-emerald-400 font-black text-[11px]">Fail-Soft Offline Resilience:</div>
+                    <div className="text-emerald-400 font-black text-[11px]">Tunnel-Safe Security Gate:</div>
                     <p className="text-[11px] text-neutral-300 leading-relaxed">
-                      If the kiosk ISP drops offline, transactions queue in memory safely. The moment connection restores, all buffered coin records automatically flush to Supabase with zero data loss.
+                      Captive portal pages, coin-slot triggers, and internal endpoints return <code>401 Unauthorized</code> over the tunnel. Only your Admin PIN login is exposed.
                     </p>
                   </div>
                 </div>
               </div>
 
               <div className="p-3 bg-neutral-100 rounded-xl font-mono text-[11px] text-neutral-700 flex items-center justify-between">
-                <span>📊 Production Tables: <code>piso_machines</code>, <code>piso_transactions</code></span>
-                <span className="font-bold text-emerald-700">Row Level Security</span>
-              </div>
-            </div>
-
-            {/* Integration 3: Vercel Cloud Admin Hosting */}
-            <div className="bg-white neo-border-3 rounded-2xl p-6 sm:p-7 neo-shadow space-y-5 flex flex-col justify-between">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-b-2 border-black pb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">▲</span>
-                    <div>
-                      <h3 className="text-lg font-black leading-tight">Vercel Cloud Fleet Dashboard</h3>
-                      <span className="text-[10px] font-mono font-bold text-neutral-600 uppercase">24/7 Web App • Global Access</span>
-                    </div>
-                  </div>
-                  <span className="px-2 py-0.5 bg-neutral-100 text-neutral-800 text-[10px] font-mono font-black rounded border border-neutral-300">
-                    SERVERLESS
-                  </span>
-                </div>
-
-                <p className="text-xs text-neutral-700 leading-relaxed font-medium">
-                  Deploy the OpenPisoWiFi admin portal to Vercel for a public cloud dashboard (<code>https://your-piso.vercel.app</code>) to check daily earnings, transaction logs, and kiosk uptime from any smartphone or laptop worldwide.
-                </p>
-
-                <div className="space-y-3 font-mono text-xs">
-                  <div className="p-3 bg-neutral-50 neo-border rounded-xl space-y-1 text-black">
-                    <span className="font-bold text-black flex items-center gap-1.5">
-                      <Globe className="w-3.5 h-3.5 text-neutral-800" />
-                      Deployment Steps:
-                    </span>
-                    <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-neutral-800 pt-1">
-                      <li>Push your repository fork to GitHub.</li>
-                      <li>In <a href="https://vercel.com" target="_blank" rel="noreferrer" className="font-bold underline text-black">vercel.com</a>, click <strong>Add New Project</strong> and import your repo.</li>
-                      <li>Set <strong>Root Directory</strong> to <code>portal</code>. Vercel automatically detects Next.js.</li>
-                      <li>Add environment variables: <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>.</li>
-                      <li>Click <strong>Deploy</strong>. Open <code>/admin/cloud</code> on your live Vercel URL to monitor all machines!</li>
-                    </ol>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-neutral-100 rounded-xl font-mono text-[11px] text-neutral-700 flex items-center justify-between">
-                <span>⚙️ Preconfigured: <code>portal/vercel.json</code></span>
-                <span className="font-bold text-black">Zero Config Next.js</span>
+                <span>🔒 Protected by scrypt Admin PIN</span>
+                <span className="font-bold text-emerald-700">CGNAT Bypass</span>
               </div>
             </div>
 

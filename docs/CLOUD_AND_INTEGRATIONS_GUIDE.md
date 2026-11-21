@@ -90,7 +90,7 @@ The bot will also push real-time notifications to your phone automatically:
 OpenPisoWiFi has built-in `cloudflared` supervision in the hardware daemon. You can access your local Admin Panel from anywhere in the world without opening router ports, paying for a static IP, or creating an external database.
 
 ### Zero-Setup Quick Tunnel (`trycloudflare.com`)
-1. Open `/admin` → **Remote Access & Satellites** (or `/admin/cloud`).
+1. Open `/admin` → **Remote Access & Satellites**.
 2. Under **Cloudflare Tunnel Remote Admin**, select **Quick (Free)** mode.
 3. Check **Auto-start tunnel on boot & send link to Telegram** and click **Save Tunnel Settings**, or click **Start Tunnel**.
 4. When `cloudflared` generates your `https://*.trycloudflare.com` URL:

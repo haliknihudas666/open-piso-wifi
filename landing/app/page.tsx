@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import {
   Zap,
@@ -38,8 +38,30 @@ export default function LandingPage() {
   const [isLiveVersion, setIsLiveVersion] = useState(false);
   const [versionSource, setVersionSource] = useState('');
 
-  // --- Mobile Navigation Menu State ---
+  // --- Navigation Menu State ---
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [exploreMenuOpen, setExploreMenuOpen] = useState(false);
+  const exploreMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!exploreMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (exploreMenuRef.current && !exploreMenuRef.current.contains(event.target as Node)) {
+        setExploreMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExploreMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [exploreMenuOpen]);
 
   // --- Build Switcher State ---
   const [activeBuild, setActiveBuild] = useState<1 | 2 | 3>(1);
@@ -206,79 +228,145 @@ export default function LandingPage() {
       </aside>
 
       {/* Sticky Top Navbar */}
-      <header className="sticky top-0 z-50 bg-[#ffe17c] border-b-2 border-black px-3 sm:px-8 py-2.5 sm:py-3.5 neo-shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-black rounded-lg sm:rounded-xl neo-border flex items-center justify-center text-[#ffe17c] neo-shadow-xs font-black text-base sm:text-xl shrink-0">
+      <header className="sticky top-0 z-50 bg-[#ffe17c] border-b-2 border-black px-4 sm:px-6 lg:px-8 py-3 neo-shadow-sm">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          {/* Brand */}
+          <Link href="/" className="flex items-center gap-2.5 shrink-0 group">
+            <div className="w-9 h-9 bg-black rounded-xl neo-border flex items-center justify-center text-[#ffe17c] neo-shadow-xs font-black text-lg shrink-0">
               ⚡
             </div>
-            <div>
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="font-black text-lg sm:text-2xl tracking-tight leading-none">OpenPisoWiFi</span>
-                <span
-                  className="px-1.5 py-0.5 sm:px-2 bg-black text-[#ffe17c] text-[9px] sm:text-[10px] font-black uppercase rounded tracking-wider flex items-center gap-1"
-                  title={isLiveVersion ? `Synced live via ${versionSource}` : 'Default release tag'}
-                >
-                  <span>{version}</span>
-                  {isLiveVersion && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Live from GitHub" />
-                  )}
-                </span>
-              </div>
-              <p className="text-[11px] font-bold text-neutral-800 leading-none mt-1 hidden sm:block">
-                Open-Source Hotspot &amp; Kiosk Gateway
-              </p>
+            <div className="flex items-center gap-2">
+              <span className="font-black text-lg sm:text-xl tracking-tight leading-none group-hover:underline">
+                OpenPisoWiFi
+              </span>
+              <span
+                className="px-2 py-0.5 bg-black text-[#ffe17c] text-[10px] font-black uppercase rounded tracking-wider inline-flex items-center gap-1"
+                title={isLiveVersion ? `Synced live via ${versionSource}` : 'Default release tag'}
+              >
+                <span>{version}</span>
+                {isLiveVersion && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Live from GitHub" />
+                )}
+              </span>
             </div>
-          </div>
+          </Link>
 
-          <nav className="hidden xl:flex items-center gap-3.5 2xl:gap-5 font-bold text-xs 2xl:text-sm whitespace-nowrap">
-            <a href="#architectures" className="hover:underline">Architectures</a>
-            <a href="#simulator" className="hover:underline">Live Simulator</a>
-            <a href="#cloud-fleet" className="hover:underline">Cloud Fleet</a>
-            <a href="#shield" className="hover:underline font-black text-emerald-800">🛡️ Shield</a>
-            <a href="#features" className="hover:underline">Features</a>
-            <a href="#compare" className="hover:underline">Comparison</a>
-            <Link href="/build-guide" className="hover:underline font-black flex items-center gap-1">
-              Build Guide <span className="text-[10px] bg-black text-[#ffe17c] px-1.5 py-0.2 rounded font-mono">NEW</span>
-            </Link>
-            <Link href="/flasher" className="hover:underline font-black flex items-center gap-1 text-emerald-800">
-              ⚡ Web Flasher <span className="text-[10px] bg-emerald-700 text-white px-1.5 py-0.2 rounded font-mono">USB</span>
-            </Link>
-            <a href="#contribute" className="hover:underline">Contribute</a>
-            <a href="#faq" className="hover:underline">FAQ</a>
+          {/* Desktop Primary Nav (5 clean items, zero overflow) */}
+          <nav aria-label="Primary navigation" className="hidden lg:flex items-center gap-6 font-bold text-sm whitespace-nowrap">
+            <a href="#architectures" className="hover:underline underline-offset-4">Architectures</a>
+            <a href="#simulator" className="hover:underline underline-offset-4">Simulator</a>
+            <Link href="/build-guide" className="hover:underline underline-offset-4">Build Guide</Link>
+            <Link href="/flasher" className="hover:underline underline-offset-4">Web Flasher</Link>
+
+            <div className="relative" ref={exploreMenuRef}>
+              <button
+                type="button"
+                onClick={() => setExploreMenuOpen((prev) => !prev)}
+                aria-expanded={exploreMenuOpen}
+                aria-haspopup="menu"
+                className="inline-flex items-center gap-1 font-bold text-sm hover:underline underline-offset-4 cursor-pointer"
+              >
+                <span>Explore</span>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-150 ${exploreMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {exploreMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute left-0 top-full mt-3 w-64 bg-white neo-border-2 rounded-2xl neo-shadow p-2 space-y-1 z-50"
+                >
+                  <a
+                    role="menuitem"
+                    href="#cloud-fleet"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>Cloudflare Tunnel &amp; Telegram</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                  <a
+                    role="menuitem"
+                    href="#shield"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>OpenPiso Shield</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                  <a
+                    role="menuitem"
+                    href="#features"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>Features</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                  <a
+                    role="menuitem"
+                    href="#compare"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>Comparison</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                  <a
+                    role="menuitem"
+                    href="#contribute"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>Contribute</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                  <a
+                    role="menuitem"
+                    href="#faq"
+                    onClick={() => setExploreMenuOpen(false)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold hover:bg-[#ffe17c] transition-colors"
+                  >
+                    <span>FAQ</span>
+                    <span className="text-neutral-500">→</span>
+                  </a>
+                </div>
+              )}
+            </div>
           </nav>
 
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Right Actions */}
+          <div className="flex items-center gap-2 shrink-0">
             <a
               href="https://github.com/haliknihudas666/open-piso-wifi"
               target="_blank"
               rel="noreferrer"
-              className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 bg-white text-black font-black text-xs sm:text-sm neo-border rounded-xl neo-shadow-xs btn-press flex items-center gap-1.5 shrink-0"
+              aria-label="Star OpenPisoWiFi on GitHub"
+              className="px-2.5 py-1.5 sm:px-3 sm:py-2 bg-white text-black font-black text-xs sm:text-sm neo-border rounded-xl neo-shadow-xs btn-press inline-flex items-center gap-1.5 shrink-0"
             >
               <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-500 fill-amber-500" />
-              <span className="hidden md:inline">Star on</span>
-              <span>GitHub</span>
+              <span className="hidden sm:inline">GitHub</span>
             </a>
             <a
               href="#quickstart"
-              className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 bg-black text-[#ffe17c] font-black text-xs sm:text-sm neo-border rounded-xl neo-shadow-xs btn-press whitespace-nowrap shrink-0"
+              className="px-3 py-1.5 sm:px-4 sm:py-2 bg-black text-[#ffe17c] font-black text-xs sm:text-sm neo-border rounded-xl neo-shadow-xs btn-press whitespace-nowrap shrink-0"
             >
-              <span className="hidden sm:inline">⚡ 1-Click Install</span>
-              <span className="sm:hidden">⚡ Install</span>
+              <span>Install</span>
             </a>
             <button
+              type="button"
               onClick={() => setMobileMenuOpen((prev) => !prev)}
               aria-label="Toggle navigation menu"
-              className="xl:hidden w-8 h-8 sm:w-9 sm:h-9 bg-black text-[#ffe17c] rounded-xl neo-border flex items-center justify-center neo-shadow-xs btn-press shrink-0"
+              aria-expanded={mobileMenuOpen}
+              className="lg:hidden w-9 h-9 bg-black text-[#ffe17c] rounded-xl neo-border flex items-center justify-center neo-shadow-xs btn-press shrink-0"
             >
-              {mobileMenuOpen ? <X className="w-4 h-4 sm:w-5 sm:h-5 text-white" /> : <Menu className="w-4 h-4 sm:w-5 sm:h-5" />}
+              {mobileMenuOpen ? <X className="w-4 h-4 text-white" /> : <Menu className="w-4 h-4" />}
             </button>
           </div>
         </div>
 
         {/* Mobile / Tablet Collapsible Navigation Menu */}
         {mobileMenuOpen && (
-          <div className="max-w-7xl mx-auto xl:hidden border-t-2 border-black mt-2.5 sm:mt-3.5 pt-3 pb-1 space-y-2">
+          <div className="max-w-7xl mx-auto lg:hidden border-t-2 border-black mt-3 pt-3 pb-1 space-y-2">
             <nav className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-black text-xs sm:text-sm">
               <a
                 href="#architectures"
@@ -301,7 +389,7 @@ export default function LandingPage() {
                 onClick={() => setMobileMenuOpen(false)}
                 className="px-3.5 py-2.5 bg-white neo-border rounded-xl neo-shadow-xs hover:bg-amber-100 flex items-center justify-between"
               >
-                <span>☁️ Supabase Cloud Fleet</span>
+                <span>🌐 Cloudflare Tunnel + Telegram</span>
                 <span>→</span>
               </a>
               <a
@@ -832,75 +920,73 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
 
           <div className="text-center max-w-2xl mx-auto space-y-3">
             <span className="px-3 py-1 bg-black text-[#ffe17c] neo-border rounded-full text-xs font-black uppercase tracking-wider neo-shadow-xs">
-              Central Fleet Command
+              Remote Admin Anywhere
             </span>
             <h2 className="text-3xl sm:text-5xl font-black tracking-tight">
-              Manage 1 or 100 Machines Anywhere
+              Access Your Admin Panel From Anywhere
             </h2>
             <p className="text-neutral-800 font-medium text-base">
-              Zero monthly subscription fees. Leverage Supabase&apos;s free tier for cloud telemetry and Telegram bots for instant revenue pings.
+              Zero monthly subscription fees or port forwarding. Built-in Cloudflare Quick Tunnels (<code>trycloudflare.com</code>) and Telegram bots let you manage your kiosk behind any CGNAT.
             </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
 
-            {/* Left: Cloud Dashboard Highlights */}
+            {/* Left: Cloudflare Tunnel Highlights */}
             <div className="lg:col-span-6 space-y-4">
               <div className="bg-white neo-border-3 rounded-2xl p-6 neo-shadow space-y-4">
                 <div className="flex items-center justify-between border-b-2 border-black pb-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-xl">📊</span>
-                    <h3 className="font-black text-xl">Supabase Cloud Telemetry</h3>
+                    <span className="text-xl">🌐</span>
+                    <h3 className="font-black text-xl">Cloudflare Tunnel Remote Admin</h3>
                   </div>
-                  <span className="px-2 py-0.5 bg-emerald-400 text-black text-xs font-black rounded">FREE TIER COMPLIANT</span>
+                  <span className="px-2 py-0.5 bg-emerald-400 text-black text-xs font-black rounded">ZERO SETUP</span>
                 </div>
 
                 <ul className="space-y-3 text-sm font-bold text-neutral-800">
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-lg bg-black text-[#ffe17c] flex items-center justify-center text-xs shrink-0 mt-0.5">✓</span>
-                    <span><strong>Multi-Branch Vault Sync:</strong> View daily collections, total revenue, and connected client counts from anywhere in the world.</span>
+                    <span><strong>Instant Quick Tunnels:</strong> Spawns <code>cloudflared</code> automatically and generates an HTTPS <code>*.trycloudflare.com/admin</code> link with zero account needed (or use a Named Tunnel token).</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-lg bg-black text-[#ffe17c] flex items-center justify-center text-xs shrink-0 mt-0.5">✓</span>
-                    <span><strong>Remote Command Bus:</strong> Unlock/block coin slots, reboot routers, add customer bonus time, or kick devices remotely.</span>
+                    <span><strong>Auto-Sent to Telegram &amp; Admin UI:</strong> Every generated link is pushed straight to your Telegram Admin Chat and displayed live in the dashboard.</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-lg bg-black text-[#ffe17c] flex items-center justify-center text-xs shrink-0 mt-0.5">✓</span>
-                    <span><strong>Row-Level Security (RLS):</strong> Secure multi-tenant database policies ensure operators only access their own machines.</span>
+                    <span><strong>Tunnel-Safe Security Gate:</strong> Captive portal, coin-slot triggers, and internal routes return <code>401</code> over the tunnel—only Admin Login is exposed.</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-lg bg-black text-[#ffe17c] flex items-center justify-center text-xs shrink-0 mt-0.5">✓</span>
-                    <span><strong>Zero-Cost Telegram Notifications:</strong> Instant push messages direct to your phone every time a coin drops or the vault is collected.</span>
+                    <span><strong>Zero-Cost Telegram Bot:</strong> Instant coin-drop alerts and remote commands (<code>/tunnel</code>, <code>/sales</code>, <code>/slots</code>, <code>/emptybox</code>, <code>/shield</code>).</span>
                   </li>
                 </ul>
               </div>
             </div>
 
-            {/* Right: Mock Telegram & Cloud Terminal Card */}
+            {/* Right: Mock Telegram & Tunnel Terminal Card */}
             <div className="lg:col-span-6 space-y-4">
               <div className="bg-black text-white neo-border-3 rounded-2xl p-6 neo-shadow-xl space-y-4">
                 <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
                   <div className="flex items-center gap-2">
                     <span className="text-sky-400 text-xl">✈</span>
-                    <span className="font-mono text-sm font-bold">@OpenPisoWiFi_Bot (Telegram Notification)</span>
+                    <span className="font-mono text-sm font-bold">@OpenPisoWiFi_Bot (Telegram Alert)</span>
                   </div>
                   <span className="text-[10px] font-mono text-neutral-400">Just now</span>
                 </div>
 
                 <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-4 font-mono text-xs text-neutral-200 space-y-2">
-                  <div className="text-[#ffe17c] font-black">💰 COIN DEPOSIT CONFIRMED</div>
+                  <div className="text-[#ffe17c] font-black">🌐 REMOTE ADMIN TUNNEL READY</div>
                   <div className="text-neutral-300">
-                    • <strong>Kiosk:</strong> Sari-Sari Store #1 (Pi-4B-01)<br />
-                    • <strong>Amount:</strong> +₱10.00 (Pulse count: 10)<br />
-                    • <strong>Client MAC:</strong> 4a:92:bc:12:00:8e<br />
-                    • <strong>New Expiry:</strong> 2026-10-13 18:30 (+3h 0m)<br />
-                    • <strong>Total Today:</strong> ₱1,450.00 (Active: 8 users)
+                    • <strong>Mode:</strong> Quick Tunnel (trycloudflare.com)<br />
+                    • <strong>Admin Panel:</strong> https://gentle-breeze.trycloudflare.com/admin<br />
+                    • <strong>Security:</strong> Protected by Admin PIN (401 on portal routes)
                   </div>
                 </div>
 
                 <div className="p-3 bg-neutral-900 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs">
-                  <span className="text-neutral-400">Cloud Schema Location:</span>
-                  <code className="text-amber-300">supabase/schema.sql</code>
+                  <span className="text-neutral-400">Telegram Commands:</span>
+                  <code className="text-amber-300">/tunnel • /sales • /slots • /shield</code>
                 </div>
               </div>
             </div>
@@ -1134,7 +1220,7 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
                 </tr>
                 <tr className="hover:bg-amber-50">
                   <td className="p-4 sm:p-5">Cloud Fleet Telemetry</td>
-                  <td className="p-4 sm:p-5 bg-amber-100/50 text-neutral-900 font-black">Free Supabase + Telegram Bot</td>
+                  <td className="p-4 sm:p-5 bg-amber-100/50 text-neutral-900 font-black">Cloudflare Tunnel + Telegram Bot</td>
                   <td className="p-4 sm:p-5 text-neutral-600">None (Local storage only)</td>
                   <td className="p-4 sm:p-5 text-neutral-600">Proprietary cloud subscription</td>
                 </tr>
@@ -2168,11 +2254,11 @@ const char* SHARED_SECRET = &quot;change-me-to-a-secure-secret&quot;;</code></pr
 
             <details className="group bg-[#f6f4ea] neo-border rounded-2xl p-5 neo-shadow-xs">
               <summary className="font-black text-base cursor-pointer list-none flex items-center justify-between">
-                <span>How does the Supabase Cloud Fleet management work?</span>
+                <span>How does remote admin access via Cloudflare Tunnel &amp; Telegram work?</span>
                 <span className="transition group-open:rotate-180">▼</span>
               </summary>
               <p className="mt-3 text-sm text-neutral-700 font-medium leading-relaxed">
-                Each machine can optionally sync telemetry (daily sales, coin collections, system health) to your free Supabase PostgreSQL database. You can view all your machines in a unified web portal or receive instant push notifications via Telegram Bot.
+                The hardware daemon supervises a built-in Cloudflare Tunnel (<code>trycloudflare.com</code> Quick Tunnel by default, or an optional Named Tunnel token) and automatically sends the live <code>/admin</code> URL to your Telegram Admin Chat and displays it in the Admin Panel. Over the tunnel, captive-portal and coin-slot routes return <code>401</code>, so only your Admin PIN login is reachable.
               </p>
             </details>
 

@@ -431,6 +431,39 @@ fi
 
 echo -e "${GREEN}✓ Node.js $(node -v) & npm $(npm -v) verified.${NC}"
 
+# Optional: Install cloudflared for Remote Admin Tunnel (trycloudflare.com)
+if ! command -v cloudflared >/dev/null 2>&1; then
+    echo -e "${CYAN}--> Installing cloudflared for Remote Admin Tunnel...${NC}"
+    CF_ARCH=""
+    case "$(uname -m)" in
+        x86_64|amd64) CF_ARCH="amd64" ;;
+        aarch64|arm64) CF_ARCH="arm64" ;;
+        armv7l|armv6l|armhf) CF_ARCH="arm" ;;
+    esac
+    if [ -n "$CF_ARCH" ]; then
+        CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
+        CF_INSTALLED=false
+        for attempt in 1 2 3; do
+            if curl -fSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 120 "$CF_URL" -o /tmp/cloudflared 2>/dev/null; then
+                sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+                rm -f /tmp/cloudflared
+                if command -v cloudflared >/dev/null 2>&1; then
+                    CF_INSTALLED=true
+                    echo -e "${GREEN}✓ cloudflared installed: $(cloudflared --version 2>/dev/null | head -n1)${NC}"
+                    break
+                fi
+            fi
+            rm -f /tmp/cloudflared
+            [ "$attempt" -lt 3 ] && echo -e "${YELLOW}⚠️ cloudflared download failed (attempt ${attempt}/3). Retrying in 3s...${NC}" && sleep 3
+        done
+        if [ "$CF_INSTALLED" = false ]; then
+            echo -e "${YELLOW}⚠️ Could not download cloudflared after 3 attempts (offline or rate-limited). You can install it later.${NC}"
+        fi
+    fi
+else
+    echo -e "${GREEN}✓ cloudflared already installed.${NC}"
+fi
+
 # ------------------------------------------------------------------------------
 # STEP 2: CONFIGURE STATIC IP ($PORTAL_IP)
 # ------------------------------------------------------------------------------
