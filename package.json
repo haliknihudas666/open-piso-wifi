@@ -1,6 +1,6 @@
 {
   "name": "open-piso-wifi",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "scripts": {
     "dev:portal": "cd portal && npm run dev",
