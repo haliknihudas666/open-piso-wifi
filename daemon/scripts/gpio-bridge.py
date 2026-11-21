@@ -74,15 +74,22 @@ def parse_optional_bcm(raw, default=None):
 
 
 class PulseTracker:
-    """Measures LOW pulse widths between falling and rising edges to reject ESD spikes & stuck shorts."""
+    """Measures active pulse widths (LOW for NO, HIGH for NC/active-HIGH) to reject ESD spikes & stuck shorts."""
 
-    def __init__(self, coin_bcm):
+    def __init__(self, coin_bcm, active_low=True):
         self.coin_bcm = coin_bcm
+        self.active_low = active_low
         self.lock = threading.Lock()
         self.pulse_start = None
         self.stuck_reported = False
         self.blank_until = 0.0
         self.short_spikes = []
+
+    def set_active_low(self, active_low):
+        with self.lock:
+            self.active_low = bool(active_low)
+            self.pulse_start = None
+            self.stuck_reported = False
 
     def notify_inhibit_change(self, now=None):
         ts = now if now is not None else time.monotonic()
@@ -93,6 +100,19 @@ class PulseTracker:
 
     def on_falling(self, now=None):
         ts = now if now is not None else time.monotonic()
+        if self.active_low:
+            self._on_pulse_start(ts)
+        else:
+            self._on_pulse_end(ts)
+
+    def on_rising(self, now=None):
+        ts = now if now is not None else time.monotonic()
+        if self.active_low:
+            self._on_pulse_end(ts)
+        else:
+            self._on_pulse_start(ts)
+
+    def _on_pulse_start(self, ts):
         with self.lock:
             if ts < self.blank_until:
                 return
@@ -100,8 +120,7 @@ class PulseTracker:
                 self.pulse_start = ts
                 self.stuck_reported = False
 
-    def on_rising(self, now=None):
-        ts = now if now is not None else time.monotonic()
+    def _on_pulse_end(self, ts):
         action = None
         width_ms = 0.0
         with self.lock:
@@ -129,7 +148,8 @@ class PulseTracker:
             log(f"Rejected ESD/piezo spike on BCM {self.coin_bcm}: {width_ms:.2f}ms (< {MIN_PULSE_WIDTH_MS}ms)")
             emit_json({"event": "tamper", "reason": "esd_spike", "widthMs": round(width_ms, 2)})
         elif action == "stuck":
-            log(f"Rejected stuck-LOW pulse on BCM {self.coin_bcm}: {width_ms:.2f}ms (> {MAX_PULSE_WIDTH_MS}ms)")
+            stuck_label = "stuck_low" if self.active_low else "stuck_high"
+            log(f"Rejected {stuck_label} pulse on BCM {self.coin_bcm}: {width_ms:.2f}ms (> {MAX_PULSE_WIDTH_MS}ms)")
             emit_json({"event": "tamper", "reason": "stuck_low", "widthMs": round(width_ms, 2)})
         elif action == "valid":
             log(f"Valid coin pulse on BCM {self.coin_bcm} ({width_ms:.1f}ms)")
@@ -146,7 +166,8 @@ class PulseTracker:
                     self.stuck_reported = True
                     emit_stuck = True
         if emit_stuck:
-            log(f"Stuck-LOW short detected on BCM {self.coin_bcm} ({width_ms:.1f}ms > {MAX_PULSE_WIDTH_MS}ms)")
+            stuck_label = "Stuck-LOW" if self.active_low else "Stuck-HIGH"
+            log(f"{stuck_label} short detected on BCM {self.coin_bcm} ({width_ms:.1f}ms > {MAX_PULSE_WIDTH_MS}ms)")
             emit_json({"event": "tamper", "reason": "stuck_low", "widthMs": round(width_ms, 2)})
 
 
@@ -606,10 +627,9 @@ def main():
     })
 
     coin_pressed = driver.get_coin_pressed()
-    idle_state = "LOW (0V / PRESSED)" if coin_pressed else "HIGH (3.3V IDLE)"
-    log(f"GPIO hardware ready via {driver.name}: Coin BCM {coin_bcm} idle state is {idle_state}.")
-    if coin_pressed:
-        log(f"WARNING: Coin BCM {coin_bcm} is starting in LOW state! Ensure switch is NO (Normally Open), not NC.")
+    idle_state = "LOW (0V / active-HIGH or NC)" if coin_pressed else "HIGH (3.3V / active-LOW NO)"
+    tracker.set_active_low(coin_pressed == 0)
+    log(f"GPIO hardware ready via {driver.name}: Coin BCM {coin_bcm} idle state is {idle_state} (active_low={tracker.active_low}).")
 
     while True:
         line = sys.stdin.readline()
