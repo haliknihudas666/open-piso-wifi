@@ -646,10 +646,11 @@ ${SHORTCUT_INPUT}
         # 1. Drop blacklisted devices FIRST (before ct state established,related!)
         ether saddr @piso_blacklist drop
 
-        # 2. Allow RPi outbound & controlled inbound access (:80 for all, :4000 for @piso_whitelist only)
+        # 2. Allow RPi outbound & controlled inbound access (:80 for all, :22/:4000 for @piso_whitelist, :22 from non-guest interfaces)
         ip saddr ${RPI_IP} accept
         ip daddr ${RPI_IP} tcp dport 80 accept
-        ip daddr ${RPI_IP} tcp dport 4000 ether saddr @piso_whitelist accept
+        ip daddr ${RPI_IP} tcp dport { 22, 4000 } ether saddr @piso_whitelist accept
+        iifname != "br-lan" ip daddr ${RPI_IP} tcp dport 22 accept
         ip daddr ${RPI_IP} tcp dport { 22, 3000, 4000 } drop
         ip daddr ${RPI_IP} ct state established,related accept
 
